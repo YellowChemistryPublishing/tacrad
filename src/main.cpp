@@ -184,9 +184,6 @@ int main()
         {
             if (dir.path().stem().string() != musicName && i++ == val)
             {
-                ma_sound_stop(&music);
-                ma_sound_uninit(&music);
-
                 fs::path musicFile;
                 if (ma_sound_init_from_file(&engine, musicLookup(dir.path().stem().string(), musicFile).c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
                 {
@@ -338,6 +335,8 @@ int main()
                     PlaylistNext:
                     if (shuffle)
                     {
+                        if (playing)
+                            stopMusic();
                         tryPlayNextShuffle();
                     }
                     else std::cerr << "[tacrad] [log.warn] unimplemented\n";
@@ -414,7 +413,10 @@ int main()
             if (curFrame >= frameLen)
             {
                 if (shuffle && fs::exists("music/"))
+                {
+                    stopMusic();
                     tryPlayNextShuffle();
+                }
                 else
                 {
                     paused = true;
