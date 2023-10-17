@@ -41,8 +41,7 @@ constexpr std::vector<std::string> split(std::string_view str)
     size_t beg = 0, end = str.find_first_of(' ', beg);
     while (end != std::string_view::npos)
     {
-        if (end - beg != 1)
-            ret.push_back(std::string(str.begin() + beg, str.begin() + end));
+        ret.push_back(std::string(str.begin() + beg, str.begin() + end));
 
         beg = end + 1;
         end = str.find_first_of(' ', beg);
@@ -75,37 +74,40 @@ std::string musicLookup(std::string_view name, fs::path& file)
     std::string compare; compare.append(name);
     for (auto& c : compare)
         c = std::tolower(c);
-        
-    for (auto& dir : fs::recursive_directory_iterator("music/"))
+    
+    if (fs::exists("music/"))
     {
-        if (dir.is_regular_file())
+        for (auto& dir : fs::recursive_directory_iterator("music/"))
         {
-            if (toLower(dir.path().root_name().string()) == compare)
+            if (dir.is_regular_file())
             {
-                file = dir.path();
-                return dir.path().string();
+                if (toLower(dir.path().root_name().string()) == compare)
+                {
+                    file = dir.path();
+                    return dir.path().string();
+                }
             }
         }
-    }
-    for (auto& dir : fs::recursive_directory_iterator("music/"))
-    {
-        if (dir.is_regular_file())
+        for (auto& dir : fs::recursive_directory_iterator("music/"))
         {
-            if (toLower(dir.path().filename().string()).starts_with(compare))
+            if (dir.is_regular_file())
             {
-                file = dir.path();
-                return dir.path().string();
+                if (toLower(dir.path().filename().string()).starts_with(compare))
+                {
+                    file = dir.path();
+                    return dir.path().string();
+                }
             }
         }
-    }
-    for (auto& dir : fs::recursive_directory_iterator("music/"))
-    {
-        if (dir.is_regular_file())
+        for (auto& dir : fs::recursive_directory_iterator("music/"))
         {
-            if (toLower(dir.path().filename().string()).contains(compare))
+            if (dir.is_regular_file())
             {
-                file = dir.path();
-                return dir.path().string();
+                if (toLower(dir.path().filename().string()).contains(compare))
+                {
+                    file = dir.path();
+                    return dir.path().string();
+                }
             }
         }
     }
@@ -136,10 +138,13 @@ int main()
 
     srand(time(nullptr));
 
+    ma_sound music;
+
     bool playing = false;
     bool paused = false;
     bool shuffle = false;
-    ma_sound music;
+
+    ma_uint64 prevFrame = 0;
     ma_uint64 frameLen;
     float musicLen;
     std::string musicName;
@@ -147,6 +152,56 @@ int main()
     std::string read;
     std::chrono::high_resolution_clock::time_point nextDraw = std::chrono::high_resolution_clock::now();
     short oldColumns = 0;
+
+    auto startMusic = [&](std::string_view query)
+    {
+        fs::path musicFile;
+        if (ma_sound_init_from_file(&engine, musicLookup(query, musicFile).c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
+        {
+            ma_sound_start(&music);
+            ma_sound_get_length_in_pcm_frames(&music, &frameLen);
+            ma_sound_get_length_in_seconds(&music, &musicLen);
+            musicName = musicFile.stem().string();
+            playing = true;
+        }
+        else std::cerr << "[tacrad] [log.error] Music query doesn't exist!\n";
+    };
+    auto stopMusic = [&]
+    {
+        ma_sound_stop(&music);
+        ma_sound_uninit(&music);
+        playing = false;
+        paused = false;
+    };
+    auto tryPlayNextShuffle = [&]
+    {
+        size_t ct = 0;
+        for (auto& dir : fs::recursive_directory_iterator("music/"))
+            if (dir.path().stem().string() != musicName)
+                ++ct;
+        size_t i = 0; int val = rand() % ct;
+        for (auto& dir : fs::recursive_directory_iterator("music/"))
+        {
+            if (dir.path().stem().string() != musicName && i++ == val)
+            {
+                ma_sound_stop(&music);
+                ma_sound_uninit(&music);
+
+                fs::path musicFile;
+                if (ma_sound_init_from_file(&engine, musicLookup(dir.path().stem().string(), musicFile).c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
+                {
+                    ma_sound_start(&music);
+                    ma_sound_get_length_in_pcm_frames(&music, &frameLen);
+                    ma_sound_get_length_in_seconds(&music, &musicLen);
+                    musicName = musicFile.stem().string();
+                    playing = true;
+                }
+
+                break;
+            }
+        }
+    };
+
     while (true)
     {
         #if _WIN32
@@ -181,6 +236,7 @@ int main()
             case hashString("clear"):
                 break;
             case hashString("play"):
+            case hashString("p"):
                 if (cmd.size() < 2) [[unlikely]]
                 {
                     std::cerr << "[tacrad] [log.error] Track title argument must be given to \"play\"!\n";
@@ -195,17 +251,7 @@ int main()
                         lookupName.push_back(' ');
                         lookupName.append(word);
                     }
-
-                    fs::path musicFile;
-                    if (ma_sound_init_from_file(&engine, musicLookup(lookupName, musicFile).c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
-                    {
-                        ma_sound_start(&music);
-                        ma_sound_get_length_in_pcm_frames(&music, &frameLen);
-                        ma_sound_get_length_in_seconds(&music, &musicLen);
-                        musicName = musicFile.stem().string();
-                        playing = true;
-                    }
-                    else std::cerr << "[tacrad] [log.error] Music query doesn't exist!\n";
+                    startMusic(lookupName);
                 }
                 else std::cerr << "[tacrad] [log.error] Already playing! Use \"pause\" and \"resume\" to control active media.\n";
                 break;
@@ -243,11 +289,6 @@ int main()
                     if (seekQuery >= 0.0 && seekQuery <= frameLen)
                     {
                         ma_sound_seek_to_pcm_frame(&music, (ma_uint64)seekQuery);
-                        if (paused)
-                        {
-                            ma_sound_start(&music);
-                            ma_sound_stop(&music);
-                        }
                     }
                     else std::cerr << "[tacrad] [log.error] Seek query out of duration of media!\n";
                 }
@@ -270,16 +311,15 @@ int main()
                 break;
             case hashString("stop"):
                 if (playing)
-                {
-                    ma_sound_stop(&music);
-                    ma_sound_uninit(&music);
-                    playing = false;
-                    paused = false;
-                }
+                    stopMusic();
                 else std::cerr << "[tacrad] [log.error] Not currently playing music! Use \"play\" to start media.\n";
                 break;
+            case hashString("next"):
+            case hashString("n"):
+                goto PlaylistNext;
             case hashString("playlist"):
             case hashString("playl"):
+            case hashString("pl"):
                 if (cmd.size() < 2) [[unlikely]]
                 {
                     std::cerr << "[tacrad] [log.error] Playlist flag argument must be given to \"playl\"!\n";
@@ -293,14 +333,26 @@ int main()
 
                 switch (hashString(cmd[1]))
                 {
+                case hashString("--next"):
+                case hashString("-n"):
+                    PlaylistNext:
+                    if (shuffle)
+                    {
+                        tryPlayNextShuffle();
+                    }
+                    else std::cerr << "[tacrad] [log.warn] unimplemented\n";
+                    break;
                 case hashString("--shuffle"):
+                case hashString("-sh"):
                     shuffle = true;
                     break;
                 case hashString("--seqential"):
                 case hashString("--seq"):
+                case hashString("-sq"):
                     std::cerr << "[tacrad] [log.warn] unimplemented\n";
                     break;
                 case hashString("--clear"):
+                case hashString("-c"):
                     shuffle = false;
                     break;
                 default:
@@ -325,7 +377,7 @@ int main()
             .append(paused ? "# " : "> ")
             .append(musicName)
             .append("  ")
-            .append(std::to_string((float)ma_sound_get_time_in_milliseconds(&music) / 1000.0f))
+            .append(std::to_string((float)ma_sound_get_time_in_pcm_frames(&music) / (float)ma_engine_get_sample_rate(&engine)))
             .append(" / ")
             .append(std::to_string(musicLen))
             .append("  ")
@@ -346,50 +398,30 @@ int main()
             .append(playBarEnd)
             .append("\33[u");
 
+            if (out.size() - 17 > columns && out.size() - 17 > 3)
+            {
+                for (size_t i = out.size() - 17 - columns + 3 + 3; i--;)
+                    out.pop_back();
+                out.append("...\33[u");
+            }
+
             std::cout << out;
             nextDraw += std::chrono::milliseconds(17);
         }
-        if (playing)
+        ma_uint64 curFrame = ma_sound_get_time_in_pcm_frames(&music);
+        if (playing && curFrame != prevFrame)
         {
-            ma_uint64 curFrame = ma_sound_get_time_in_pcm_frames(&music);
-            if (curFrame == frameLen || curFrame == frameLen + 1)
+            if (curFrame >= frameLen)
             {
-                if (shuffle)
-                {
-                    size_t ct = 0;
-                    for (auto& dir : fs::recursive_directory_iterator("music/"))
-                        if (dir.path().stem().string() != musicName)
-                            ++ct;
-                    size_t i = 0; int val = rand() % ct;
-                    for (auto& dir : fs::recursive_directory_iterator("music/"))
-                    {
-                        if (dir.path().stem().string() != musicName && i++ == val)
-                        {
-                            ma_sound_stop(&music);
-                            ma_sound_uninit(&music);
-
-                            fs::path musicFile;
-                            if (ma_sound_init_from_file(&engine, musicLookup(dir.path().stem().string(), musicFile).c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
-                            {
-                                ma_sound_start(&music);
-                                ma_sound_get_length_in_pcm_frames(&music, &frameLen);
-                                ma_sound_get_length_in_seconds(&music, &musicLen);
-                                musicName = musicFile.stem().string();
-                                playing = true;
-                            }
-
-                            break;
-                        }
-                    }
-                }
+                if (shuffle && fs::exists("music/"))
+                    tryPlayNextShuffle();
                 else
                 {
                     paused = true;
                     ma_sound_seek_to_pcm_frame(&music, 0);
-                    ma_sound_start(&music);
-                    ma_sound_stop(&music);
                 }
             }
+            prevFrame = curFrame;
         }
     }
     Break:
