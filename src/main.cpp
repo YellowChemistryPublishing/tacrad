@@ -1,9 +1,12 @@
 #include <algorithm>
 #include <concurrentqueue.h>
+#include <deque>
 #include <filesystem>
 #include <iostream>
 #include <mutex>
+#include <random>
 #include <span>
+#include <sstream>
 static_assert(sizeof(float) == 4); // #include <stdfloat>
 #include <string>
 #include <string_view>
@@ -50,6 +53,14 @@ constexpr std::vector<std::string> split(std::string_view str)
     return std::move(ret);
 }
 
+std::string sdFloat(float val)
+{
+    std::ostringstream ret;
+    ret.precision(1);
+    ret << std::fixed << val;
+    return std::move(ret).str();
+}
+
 moodycamel::ConcurrentQueue<std::string> cmdQueue;
 void asyncRead()
 {
@@ -69,6 +80,11 @@ std::string toLower(std::string_view str)
     std::transform(ret.begin(), ret.end(), ret.begin(), [](char c){ return std::tolower(c); });
     return ret;
 }
+
+std::random_device seeder;
+std::mt19937 randEngine(seeder());
+std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
 std::string musicLookup(std::string_view name, fs::path& file)
 {
     std::string compare; compare.append(name);
@@ -81,10 +97,10 @@ std::string musicLookup(std::string_view name, fs::path& file)
         {
             if (dir.is_regular_file())
             {
-                if (toLower(dir.path().root_name().string()) == compare)
+                if (toLower(dir.path().stem().string()) == compare)
                 {
                     file = dir.path();
-                    return dir.path().string();
+                    return dir.path().stem().string();
                 }
             }
         }
@@ -92,10 +108,10 @@ std::string musicLookup(std::string_view name, fs::path& file)
         {
             if (dir.is_regular_file())
             {
-                if (toLower(dir.path().filename().string()).starts_with(compare))
+                if (toLower(dir.path().stem().string()).starts_with(compare))
                 {
                     file = dir.path();
-                    return dir.path().string();
+                    return dir.path().stem().string();
                 }
             }
         }
@@ -103,10 +119,10 @@ std::string musicLookup(std::string_view name, fs::path& file)
         {
             if (dir.is_regular_file())
             {
-                if (toLower(dir.path().filename().string()).contains(compare))
+                if (toLower(dir.path().stem().string()).contains(compare))
                 {
                     file = dir.path();
-                    return dir.path().string();
+                    return dir.path().stem().string();
                 }
             }
         }
@@ -136,13 +152,17 @@ int main()
     std::cout << "[tacrad] Welcome to the tacrad CLI! (Enter \"help\" for details.)\n[tacrad] ";
     std::thread readThread(asyncRead);
 
-    srand(time(nullptr));
-
     ma_sound music;
 
     bool playing = false;
     bool paused = false;
-    bool shuffle = false;
+    enum class PlaylistType
+    {
+        Sequential,
+        Shuffle,
+        Queued
+    } type = PlaylistType::Sequential;
+    std::deque<std::pair<std::string, fs::path>> queue;
 
     ma_uint64 prevFrame = 0;
     ma_uint64 frameLen;
@@ -166,6 +186,61 @@ int main()
         }
         else std::cerr << "[tacrad] [log.error] Music query doesn't exist!\n";
     };
+    auto tryPlayNextAlphabetical = [&](std::string_view prev, bool wasPaused) -> void
+    {
+        fs::path file;
+        std::string name(1, 'z');
+        if (prev.empty())
+        {
+            for (auto it : fs::recursive_directory_iterator("music/"))
+            {
+                if (it.path().stem().string() < name)
+                {
+                    file = it.path();
+                    name = file.stem().string();
+                }
+            }
+        }
+        else
+        {
+            std::vector<std::pair<std::string, fs::path>> tracks;
+            for (auto it : fs::recursive_directory_iterator("music/"))
+                if (it.is_regular_file())
+                    tracks.push_back(std::make_pair(it.path().stem().string(), it.path()));
+            std::sort(tracks.begin(), tracks.end(), [](auto a, auto b)
+            {
+                return a.first < b.first;
+            });
+            auto next = tracks.end();
+            for (auto it = tracks.begin(); it != tracks.end(); ++it)
+            {
+                if (it->first == prev)
+                {
+                    next = it;
+                    break;
+                }
+            }
+            ++next;
+            if (next == tracks.end())
+            {
+                std::cerr << "[tacrad] [log.info] End of playlist!\n";
+                return;
+            }
+            name = next->first;
+            file = next->second;
+        }
+        if (ma_sound_init_from_file(&engine, file.string().c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
+        {
+            ma_sound_get_length_in_pcm_frames(&music, &frameLen);
+            ma_sound_get_length_in_seconds(&music, &musicLen);
+            musicName = std::move(name);
+            playing = true;
+            if (!wasPaused)
+                ma_sound_start(&music);
+            else paused = true;
+        }
+        else std::cerr << "[tacrad] [log.error] Music query doesn't exist! [dev] name: " << name << ", file: " << file << '\n';
+    };
     auto stopMusic = [&]
     {
         ma_sound_stop(&music);
@@ -173,29 +248,63 @@ int main()
         playing = false;
         paused = false;
     };
-    auto tryPlayNextShuffle = [&]
+    auto tryPlayNextShuffle = [&](bool wasPaused = false) -> void
     {
         size_t ct = 0;
         for (auto& dir : fs::recursive_directory_iterator("music/"))
             if (dir.path().stem().string() != musicName)
                 ++ct;
-        size_t i = 0; int val = rand() % ct;
-        for (auto& dir : fs::recursive_directory_iterator("music/"))
+        if (ct != 0)
         {
-            if (dir.path().stem().string() != musicName && i++ == val)
+            More:
+            for (auto& dir : fs::recursive_directory_iterator("music/"))
             {
-                fs::path musicFile;
-                if (ma_sound_init_from_file(&engine, musicLookup(dir.path().stem().string(), musicFile).c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
+                if (dir.path().stem().string() != musicName && dist(randEngine) < 1.0f / (float)ct)
                 {
-                    ma_sound_start(&music);
-                    ma_sound_get_length_in_pcm_frames(&music, &frameLen);
-                    ma_sound_get_length_in_seconds(&music, &musicLen);
-                    musicName = musicFile.stem().string();
-                    playing = true;
-                }
+                    fs::path musicFile;
+                    if (ma_sound_init_from_file(&engine, musicLookup(dir.path().stem().string(), musicFile).c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
+                    {
+                        ma_sound_get_length_in_pcm_frames(&music, &frameLen);
+                        ma_sound_get_length_in_seconds(&music, &musicLen);
+                        musicName = musicFile.stem().string();
+                        playing = true;
+                        if (!wasPaused)
+                            ma_sound_start(&music);
+                        else paused = true;
 
-                break;
+                        return;
+                    }
+                    else std::cerr << "[tacrad] [log.error] Failed to load next track, shuffling for new one.\n";
+                }
             }
+            goto More;
+        }
+    };
+    auto tryPlayNextQueued = [&](bool wasPaused = false)
+    {
+        Retry:
+        if (queue.empty())
+        {
+            std::cerr << "[tacrad] [log.info] End of playlist!\n";
+            return;
+        }
+
+        if (ma_sound_init_from_file(&engine, queue.front().second.string().c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
+        {
+            ma_sound_get_length_in_pcm_frames(&music, &frameLen);
+            ma_sound_get_length_in_seconds(&music, &musicLen);
+            musicName = queue.front().first;
+            playing = true;
+            if (!wasPaused)
+                ma_sound_start(&music);
+            else paused = true;
+            queue.pop_front();
+        }
+        else
+        {
+            std::cerr << "[tacrad] [log.error] Couldn't load next music track in queuec, skipping! [dev] name: " << queue.front().first << ", path: " << queue.front().second << '\n';
+            queue.pop_front();
+            goto Retry;
         }
     };
 
@@ -230,10 +339,61 @@ int main()
 
             switch (hashString(cmd[0]))
             {
-            case hashString("clear"):
+            case hashString("help"):
+                std::cout <<
+R"(Help Text
+play [alias: p, >]
+    args: [trackName]
+        trackName: The name of the music item to play, or a query for one.
+    desc:
+    Plays a track.
+pause [alias: ps, p, #]
+    desc:
+    Pauses playback.
+resume [alias: res, p, >]
+    desc:
+    Resumes playback.
+seek
+    args: [seconds]
+        seconds: Point in the track to seek to.
+    desc:
+    Seeks to a point in the music track currently playing.
+volume [alias: vol]
+    args: [linVolume]
+        linVolume: Volume as a linear quantity. 1.0 is as-is. > 1.0 will amplify.
+    desc:
+    Set the volume of playback.
+stop
+    desc:
+    Stops playback of the current track.
+playl [alias: playlist, pl]
+    args: [flag]
+        flag:
+        Flag is one of -
+        --next [alias: -n cmdalias: next, n, >>]: Play the next track on the list.
+        --shuffle [alias: -sh]: Set the playlist to shuffle mode.
+        --sequential [alias: --seq, -sq]: Set the playlist to sequential mode.
+    desc:
+        Playlist related commands.
+exit
+    desc:
+    Exit this interface.
+)";
                 break;
-            case hashString("play"):
             case hashString("p"):
+                if (cmd.size() == 1 && playing)
+                {
+                    if (paused)
+                        goto MusicResume;
+                    else goto MusicPause;
+                }
+                goto MusicPlay;
+            case hashString(">"):
+                if (cmd.size() == 1 && paused)
+                    goto MusicResume;
+                [[fallthrough]];
+            case hashString("play"):
+                MusicPlay:
                 if (cmd.size() < 2) [[unlikely]]
                 {
                     std::cerr << "[tacrad] [log.error] Track title argument must be given to \"play\"!\n";
@@ -253,16 +413,33 @@ int main()
                 else std::cerr << "[tacrad] [log.error] Already playing! Use \"pause\" and \"resume\" to control active media.\n";
                 break;
             case hashString("resume"):
+            case hashString("res"):
+                if (cmd.size() == 1) [[unlikely]]
+                {
+                    std::cerr << "[tacrad] [log.error] \"resume\" takes no arguments!!\n";
+                    break;
+                }
+
                 if (playing)
                 {
+                    MusicResume:
                     ma_sound_start(&music);
                     paused = false;
                 }
                 else std::cerr << "[tacrad] [log.error] Not currently playing music! Use \"play\" and \"stop\" to change media.\n";
                 break;
             case hashString("pause"):
+            case hashString("ps"):
+            case hashString("#"):
+                if (cmd.size() == 1) [[unlikely]]
+                {
+                    std::cerr << "[tacrad] [log.error] \"pause\" takes no arguments!!\n";
+                    break;
+                }
+
                 if (playing)
                 {
+                    MusicPause:
                     ma_sound_stop(&music);
                     paused = true;
                 }
@@ -313,18 +490,14 @@ int main()
                 break;
             case hashString("next"):
             case hashString("n"):
+            case hashString(">>"):
                 goto PlaylistNext;
             case hashString("playlist"):
             case hashString("playl"):
             case hashString("pl"):
                 if (cmd.size() < 2) [[unlikely]]
                 {
-                    std::cerr << "[tacrad] [log.error] Playlist flag argument must be given to \"playl\"!\n";
-                    break;
-                }
-                if (cmd.size() > 2) [[unlikely]]
-                {
-                    std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                    std::cerr << "[tacrad] [log.error] \"playl\" Takes at least a flag argument!\n";
                     break;
                 }
 
@@ -332,37 +505,79 @@ int main()
                 {
                 case hashString("--next"):
                 case hashString("-n"):
-                    PlaylistNext:
-                    if (shuffle)
                     {
+                        if (cmd.size() > 2)
+                            std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                        PlaylistNext:
+                        bool wasPaused = paused;
                         if (playing)
                             stopMusic();
-                        tryPlayNextShuffle();
+                        switch (type)
+                        {
+                        case PlaylistType::Sequential:
+                            tryPlayNextAlphabetical(musicName, wasPaused);
+                            break;
+                        case PlaylistType::Shuffle:
+                            tryPlayNextShuffle(wasPaused);
+                            break;
+                        case PlaylistType::Queued:
+                            tryPlayNextQueued(wasPaused);
+                            break;
+                        }
                     }
-                    else std::cerr << "[tacrad] [log.warn] unimplemented\n";
                     break;
                 case hashString("--shuffle"):
                 case hashString("-sh"):
-                    shuffle = true;
+                    if (cmd.size() > 2)
+                        std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                    type = PlaylistType::Shuffle;
                     break;
-                case hashString("--seqential"):
+                case hashString("--Sequential"):
                 case hashString("--seq"):
                 case hashString("-sq"):
-                    std::cerr << "[tacrad] [log.warn] unimplemented\n";
+                    if (cmd.size() > 2)
+                        std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                    type = PlaylistType::Sequential;
                     break;
-                case hashString("--clear"):
-                case hashString("-c"):
-                    shuffle = false;
+                case hashString("--queued"):
+                case hashString("-q"):
+                    if (cmd.size() > 2)
+                        std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                    type = PlaylistType::Queued;
+                    break;
+                case hashString("--push"):
+                case hashString("-p"):
+                    {
+                        std::string lookupName = cmd[2];
+                        for (auto& word : std::span(++++++cmd.begin(), cmd.end()))
+                        {
+                            lookupName.push_back(' ');
+                            lookupName.append(word);
+                        }
+                        fs::path path;
+                        std::string name = musicLookup(lookupName, path);
+                        queue.push_back(std::make_pair(name, std::move(path)));
+                        std::cout << "[tacrad] [log.info] Adding " << name << " to playlist music queue.\n";
+                    }
                     break;
                 default:
                     std::cerr << "[tacrad] [log.warn] Unknown flag argument given to \"playl\".\n";
                 }
                 break;
             case hashString("exit"):
+                if (playing)
+                    stopMusic();
                 readThread.join();
                 goto Break;
             default:
-                std::cerr << "[tacrad] [log.error] Unknown command! Enter \"help\" to view a list of available commands!\n";
+                for (char c : cmd[0])
+                {
+                    if (!std::isspace(c))
+                    {
+                        std::cerr << "[tacrad] [log.error] Unknown command! Enter \"help\" to view a list of available commands!\n";
+                        break;
+                    }
+                }
             }
 
             if (playing)
@@ -376,11 +591,15 @@ int main()
             .append(paused ? "# " : "> ")
             .append(musicName)
             .append("  ")
-            .append(std::to_string((float)ma_sound_get_time_in_pcm_frames(&music) / (float)ma_engine_get_sample_rate(&engine)))
+            .append(sdFloat((float)ma_sound_get_time_in_pcm_frames(&music) / (float)ma_engine_get_sample_rate(&engine)))
             .append(" / ")
-            .append(std::to_string(musicLen))
-            .append("  ")
-            .append(std::to_string(ma_engine_get_volume(&engine)))
+            .append(sdFloat(musicLen))
+            .append(" (")
+            .append(std::to_string((int32_t)musicLen / 60))
+            .append("min ")
+            .append(std::to_string(int32_t(musicLen + 0.5f) % 60))
+            .append("s)  ")
+            .append(sdFloat(ma_engine_get_volume(&engine)))
             .append("v |");
             std::string playBarEnd = "|";
 
@@ -391,9 +610,9 @@ int main()
             std::string out = "\33[s\r\33[1A\r\33[2K";
             out
             .append(playBarBeg)
-            .append(std::string(std::max((int64_t)0, played - 1), '='))
+            .append(std::string(std::max((int64_t)0, played), '='))
             .append("+")
-            .append(std::string(std::max((int64_t)0, barLen - played), '-'))
+            .append(std::string(std::max((int64_t)0, barLen - played - 1), '-'))
             .append(playBarEnd)
             .append("\33[u");
 
@@ -405,26 +624,39 @@ int main()
             }
 
             std::cout << out;
-            nextDraw += std::chrono::milliseconds(17);
+            nextDraw += std::chrono::milliseconds(100);
         }
         ma_uint64 curFrame = ma_sound_get_time_in_pcm_frames(&music);
         if (playing && curFrame != prevFrame)
         {
             if (curFrame >= frameLen)
             {
-                if (shuffle && fs::exists("music/"))
+                if (fs::exists("music/"))
                 {
-                    stopMusic();
-                    tryPlayNextShuffle();
+                    switch (type)
+                    {
+                    case PlaylistType::Sequential:
+                        goto TrackRestart;
+                    case PlaylistType::Shuffle:
+                        stopMusic();
+                        tryPlayNextShuffle();
+                        break;
+                    case PlaylistType::Queued:
+                        stopMusic();
+                        tryPlayNextQueued();
+                        break;
+                    }
                 }
                 else
                 {
+                    TrackRestart:
                     paused = true;
                     ma_sound_seek_to_pcm_frame(&music, 0);
                 }
             }
             prevFrame = curFrame;
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     Break:
 
