@@ -259,14 +259,16 @@ int main()
             More:
             for (auto& dir : fs::recursive_directory_iterator("music/"))
             {
-                if (dir.path().stem().string() != musicName && dist(randEngine) < 1.0f / (float)ct)
+                if (dir.is_regular_file() && dir.path().stem().string() != musicName && dist(randEngine) < 1.0f / (float)ct)
                 {
                     fs::path musicFile;
-                    if (ma_sound_init_from_file(&engine, musicLookup(dir.path().stem().string(), musicFile).c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
+                    std::string _musicName = musicLookup(dir.path().stem().string(), musicFile);
+                    auto t = dir.path().stem().string();
+                    if (ma_sound_init_from_file(&engine, musicFile.string().c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
                     {
                         ma_sound_get_length_in_pcm_frames(&music, &frameLen);
                         ma_sound_get_length_in_seconds(&music, &musicLen);
-                        musicName = musicFile.stem().string();
+                        musicName = std::move(_musicName);
                         playing = true;
                         if (!wasPaused)
                             ma_sound_start(&music);
