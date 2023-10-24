@@ -53,10 +53,10 @@ constexpr std::vector<std::string> split(std::string_view str)
     return std::move(ret);
 }
 
-std::string sdFloat(float val)
+std::string sdFloat(float val, std::streamsize prec = 1)
 {
     std::ostringstream ret;
-    ret.precision(1);
+    ret.precision(prec);
     ret << std::fixed << val;
     return std::move(ret).str();
 }
@@ -176,12 +176,13 @@ int main()
     auto startMusic = [&](std::string_view query)
     {
         fs::path musicFile;
-        if (ma_sound_init_from_file(&engine, musicLookup(query, musicFile).c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
+        std::string _musicName = musicLookup(query, musicFile);
+        if (ma_sound_init_from_file(&engine, musicFile.string().c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
         {
             ma_sound_start(&music);
             ma_sound_get_length_in_pcm_frames(&music, &frameLen);
             ma_sound_get_length_in_seconds(&music, &musicLen);
-            musicName = musicFile.stem().string();
+            musicName = _musicName;
             playing = true;
         }
         else std::cerr << "[tacrad] [log.error] Music query doesn't exist!\n";
@@ -601,7 +602,7 @@ exit
             .append("min ")
             .append(std::to_string(int32_t(musicLen + 0.5f) % 60))
             .append("s)  ")
-            .append(sdFloat(ma_engine_get_volume(&engine)))
+            .append(sdFloat(ma_engine_get_volume(&engine), 2))
             .append("v |");
             std::string playBarEnd = "|";
 
