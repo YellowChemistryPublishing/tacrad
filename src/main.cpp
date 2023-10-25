@@ -1,8 +1,8 @@
 #include <algorithm>
 #include <concurrentqueue.h>
-#include <deque>
 #include <filesystem>
 #include <iostream>
+#include <list>
 #include <mutex>
 #include <random>
 #include <span>
@@ -44,12 +44,14 @@ constexpr std::vector<std::string> split(std::string_view str)
     size_t beg = 0, end = str.find_first_of(' ', beg);
     while (end != std::string_view::npos)
     {
-        ret.push_back(std::string(str.begin() + beg, str.begin() + end));
+        if (str.begin() + beg != str.begin() + end)
+            ret.push_back(std::string(str.begin() + beg, str.begin() + end));
 
         beg = end + 1;
         end = str.find_first_of(' ', beg);
     }
-    ret.push_back(std::string(str.begin() + beg, str.end()));
+    if (str.begin() + beg != str.end()) [[likely]]
+        ret.push_back(std::string(str.begin() + beg, str.end()));
     return std::move(ret);
 }
 
@@ -156,13 +158,15 @@ int main()
 
     bool playing = false;
     bool paused = false;
+    bool loop = false;
     enum class PlaylistType
     {
         Sequential,
         Shuffle,
         Queued
     } type = PlaylistType::Sequential;
-    std::deque<std::pair<std::string, fs::path>> queue;
+    std::list<std::pair<std::string, fs::path>> queue;
+    decltype(queue)::iterator queuePos = queue.end();
 
     ma_uint64 prevFrame = 0;
     ma_uint64 frameLen;
@@ -210,7 +214,7 @@ int main()
                     tracks.push_back(std::make_pair(it.path().stem().string(), it.path()));
             std::sort(tracks.begin(), tracks.end(), [](auto a, auto b)
             {
-                return a.first < b.first;
+                return a.second < b.second;
             });
             auto next = tracks.end();
             for (auto it = tracks.begin(); it != tracks.end(); ++it)
@@ -283,30 +287,49 @@ int main()
             goto More;
         }
     };
+    auto incrQueuePos = [&]
+    {
+        if (queuePos == queue.end())
+            queuePos = queue.begin();
+        else if (++auto(queuePos) == queue.end())
+        {
+            if (!loop)
+            {
+                std::cerr << "[tacrad] [log.info] End of playlist!\n";
+                return;
+            }
+            else queuePos = queue.begin();
+        }
+        else ++queuePos;
+    };
     auto tryPlayNextQueued = [&](bool wasPaused = false)
     {
-        Retry:
         if (queue.empty())
         {
-            std::cerr << "[tacrad] [log.info] End of playlist!\n";
+            std::cerr << "[tacrad] [log.warn] Empty playlist!\n";
             return;
         }
 
-        if (ma_sound_init_from_file(&engine, queue.front().second.string().c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
+        goto FirstTry;
+        {
+            Retry:
+            incrQueuePos();
+        }
+        FirstTry:
+        
+        if (ma_sound_init_from_file(&engine, queuePos->second.string().c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
         {
             ma_sound_get_length_in_pcm_frames(&music, &frameLen);
             ma_sound_get_length_in_seconds(&music, &musicLen);
-            musicName = queue.front().first;
+            musicName = queuePos->first;
             playing = true;
             if (!wasPaused)
                 ma_sound_start(&music);
             else paused = true;
-            queue.pop_front();
         }
         else
         {
-            std::cerr << "[tacrad] [log.error] Couldn't load next music track in queuec, skipping! [dev] name: " << queue.front().first << ", path: " << queue.front().second << '\n';
-            queue.pop_front();
+            std::cerr << "[tacrad] [log.error] Couldn't load next music track in queue, skipping! [dev] name: " << queuePos->first << ", path: " << queuePos->second << '\n';
             goto Retry;
         }
     };
@@ -340,10 +363,12 @@ int main()
             if (playing)
                 std::cout << "\33[2A\33[J";
 
-            switch (hashString(cmd[0]))
+            if (!cmd.empty())
             {
-            case hashString("help"):
-                std::cout <<
+                switch (hashString(cmd[0]))
+                {
+                case hashString("help"):
+                    std::cout <<
 R"(Help Text
 play [alias: p, >]
     args: [trackName]
@@ -382,203 +407,327 @@ exit
     desc:
     Exit this interface.
 )";
-                break;
-            case hashString("p"):
-                if (cmd.size() == 1 && playing)
-                {
-                    if (paused)
+                    break;
+                case hashString("p"):
+                    if (cmd.size() == 1 && playing)
+                    {
+                        if (paused)
+                            goto MusicResume;
+                        else goto MusicPause;
+                    }
+                    goto MusicPlay;
+                case hashString(">"):
+                    if (cmd.size() == 1 && paused)
                         goto MusicResume;
-                    else goto MusicPause;
-                }
-                goto MusicPlay;
-            case hashString(">"):
-                if (cmd.size() == 1 && paused)
-                    goto MusicResume;
-                [[fallthrough]];
-            case hashString("play"):
-                MusicPlay:
-                if (cmd.size() < 2) [[unlikely]]
-                {
-                    std::cerr << "[tacrad] [log.error] Track title argument must be given to \"play\"!\n";
-                    break;
-                }
-
-                if (!playing) [[likely]]
-                {
-                    std::string lookupName = cmd[1];
-                    for (auto& word : std::span(++++cmd.begin(), cmd.end()))
+                    [[fallthrough]];
+                case hashString("play"):
                     {
-                        lookupName.push_back(' ');
-                        lookupName.append(word);
-                    }
-                    startMusic(lookupName);
-                }
-                else std::cerr << "[tacrad] [log.error] Already playing! Use \"pause\" and \"resume\" to control active media.\n";
-                break;
-            case hashString("resume"):
-            case hashString("res"):
-                if (cmd.size() == 1) [[unlikely]]
-                {
-                    std::cerr << "[tacrad] [log.error] \"resume\" takes no arguments!!\n";
-                    break;
-                }
-
-                if (playing)
-                {
-                    MusicResume:
-                    ma_sound_start(&music);
-                    paused = false;
-                }
-                else std::cerr << "[tacrad] [log.error] Not currently playing music! Use \"play\" and \"stop\" to change media.\n";
-                break;
-            case hashString("pause"):
-            case hashString("ps"):
-            case hashString("#"):
-                if (cmd.size() == 1) [[unlikely]]
-                {
-                    std::cerr << "[tacrad] [log.error] \"pause\" takes no arguments!!\n";
-                    break;
-                }
-
-                if (playing)
-                {
-                    MusicPause:
-                    ma_sound_stop(&music);
-                    paused = true;
-                }
-                else std::cerr << "[tacrad] [log.error] Not currently playing music! Use \"play\" and \"stop\" to change media.\n";
-                break;
-            case hashString("seek"):
-                if (cmd.size() < 2) [[unlikely]]
-                {
-                    std::cerr << "[tacrad] [log.error] Seek position argument (in seconds) must be given to \"seek\"!\n";
-                    break;
-                }
-                if (cmd.size() > 2) [[unlikely]]
-                {
-                    std::cerr << "[tacrad] [log.error] Extra arguments given to \"seek\"!\n";
-                    break;
-                }
-
-                if (playing)
-                {
-                    double seekQuery = (double)ma_engine_get_sample_rate(&engine) * std::atof(cmd[1].c_str());
-                    if (seekQuery >= 0.0 && seekQuery <= frameLen)
-                    {
-                        ma_sound_seek_to_pcm_frame(&music, (ma_uint64)seekQuery);
-                    }
-                    else std::cerr << "[tacrad] [log.error] Seek query out of duration of media!\n";
-                }
-                else std::cerr << "[tacrad] [log.error] Not currently playing music! Use \"play\" and \"stop\" to change media.\n";
-                break;
-            case hashString("volume"):
-            case hashString("vol"):
-                if (cmd.size() < 2) [[unlikely]]
-                {
-                    std::cerr << "[tacrad] [log.error] Volume argument (linear) must be given to \"vol\"!\n";
-                    break;
-                }
-                if (cmd.size() > 2) [[unlikely]]
-                {
-                    std::cerr << "[tacrad] [log.error] Extra arguments given to \"vol\"!\n";
-                    break;
-                }
-
-                ma_engine_set_volume(&engine, std::atof(cmd[1].c_str()));
-                break;
-            case hashString("stop"):
-                if (playing)
-                    stopMusic();
-                else std::cerr << "[tacrad] [log.error] Not currently playing music! Use \"play\" to start media.\n";
-                break;
-            case hashString("next"):
-            case hashString("n"):
-            case hashString(">>"):
-                goto PlaylistNext;
-            case hashString("playlist"):
-            case hashString("playl"):
-            case hashString("pl"):
-                if (cmd.size() < 2) [[unlikely]]
-                {
-                    std::cerr << "[tacrad] [log.error] \"playl\" Takes at least a flag argument!\n";
-                    break;
-                }
-
-                switch (hashString(cmd[1]))
-                {
-                case hashString("--next"):
-                case hashString("-n"):
-                    {
-                        if (cmd.size() > 2)
-                            std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
-                        PlaylistNext:
-                        bool wasPaused = paused;
-                        if (playing)
-                            stopMusic();
-                        switch (type)
+                        MusicPlay:
+                        if (cmd.size() < 2) [[unlikely]]
                         {
-                        case PlaylistType::Sequential:
-                            tryPlayNextAlphabetical(musicName, wasPaused);
-                            break;
-                        case PlaylistType::Shuffle:
-                            tryPlayNextShuffle(wasPaused);
-                            break;
-                        case PlaylistType::Queued:
-                            tryPlayNextQueued(wasPaused);
+                            std::cerr << "[tacrad] [log.error] Track title argument must be given to \"play\"!\n";
                             break;
                         }
-                    }
-                    break;
-                case hashString("--shuffle"):
-                case hashString("-sh"):
-                    if (cmd.size() > 2)
-                        std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
-                    type = PlaylistType::Shuffle;
-                    break;
-                case hashString("--Sequential"):
-                case hashString("--seq"):
-                case hashString("-sq"):
-                    if (cmd.size() > 2)
-                        std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
-                    type = PlaylistType::Sequential;
-                    break;
-                case hashString("--queued"):
-                case hashString("-q"):
-                    if (cmd.size() > 2)
-                        std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
-                    type = PlaylistType::Queued;
-                    break;
-                case hashString("--push"):
-                case hashString("-p"):
-                    {
-                        std::string lookupName = cmd[2];
-                        for (auto& word : std::span(++++++cmd.begin(), cmd.end()))
+
+                        if (playing)
+                            stopMusic();
+                    
+                        std::string lookupName = cmd[1];
+                        for (auto& word : std::span(++++cmd.begin(), cmd.end()))
                         {
                             lookupName.push_back(' ');
                             lookupName.append(word);
                         }
-                        fs::path path;
-                        std::string name = musicLookup(lookupName, path);
-                        queue.push_back(std::make_pair(name, std::move(path)));
-                        std::cout << "[tacrad] [log.info] Adding " << name << " to playlist music queue.\n";
+                        startMusic(lookupName);
                     }
                     break;
-                default:
-                    std::cerr << "[tacrad] [log.warn] Unknown flag argument given to \"playl\".\n";
-                }
-                break;
-            case hashString("exit"):
-                if (playing)
-                    stopMusic();
-                readThread.join();
-                goto Break;
-            default:
-                for (char c : cmd[0])
-                {
-                    if (!std::isspace(c))
+                case hashString("resume"):
+                case hashString("res"):
+                    if (cmd.size() > 1) [[unlikely]]
                     {
-                        std::cerr << "[tacrad] [log.error] Unknown command! Enter \"help\" to view a list of available commands!\n";
+                        std::cerr << "[tacrad] [log.error] \"resume\" takes no arguments!\n";
                         break;
+                    }
+
+                    if (playing)
+                    {
+                        MusicResume:
+                        ma_sound_start(&music);
+                        paused = false;
+                    }
+                    else std::cerr << "[tacrad] [log.error] Not currently playing music! Use \"play\" and \"stop\" to change media.\n";
+                    break;
+                case hashString("pause"):
+                case hashString("ps"):
+                case hashString("#"):
+                    if (cmd.size() > 1) [[unlikely]]
+                    {
+                        std::cerr << "[tacrad] [log.error] \"pause\" takes no arguments!\n";
+                        break;
+                    }
+
+                    if (playing)
+                    {
+                        MusicPause:
+                        ma_sound_stop(&music);
+                        paused = true;
+                    }
+                    else std::cerr << "[tacrad] [log.error] Not currently playing music! Use \"play\" and \"stop\" to change media.\n";
+                    break;
+                case hashString("seek"):
+                    if (cmd.size() < 2) [[unlikely]]
+                    {
+                        std::cerr << "[tacrad] [log.error] Seek position argument (in seconds) must be given to \"seek\"!\n";
+                        break;
+                    }
+                    if (cmd.size() > 2) [[unlikely]]
+                    {
+                        std::cerr << "[tacrad] [log.error] Extra arguments given to \"seek\"!\n";
+                        break;
+                    }
+
+                    if (playing)
+                    {
+                        double seekQuery = (double)ma_engine_get_sample_rate(&engine) * std::atof(cmd[1].c_str());
+                        if (seekQuery >= 0.0 && seekQuery <= frameLen)
+                        {
+                            ma_sound_seek_to_pcm_frame(&music, (ma_uint64)seekQuery);
+                        }
+                        else std::cerr << "[tacrad] [log.error] Seek query out of duration of media!\n";
+                    }
+                    else std::cerr << "[tacrad] [log.error] Not currently playing music! Use \"play\" and \"stop\" to change media.\n";
+                    break;
+                case hashString("volume"):
+                case hashString("vol"):
+                    if (cmd.size() < 2) [[unlikely]]
+                    {
+                        std::cerr << "[tacrad] [log.error] Volume argument (linear) must be given to \"vol\"!\n";
+                        break;
+                    }
+                    if (cmd.size() > 2) [[unlikely]]
+                    {
+                        std::cerr << "[tacrad] [log.error] Extra arguments given to \"vol\"!\n";
+                        break;
+                    }
+
+                    ma_engine_set_volume(&engine, std::atof(cmd[1].c_str()));
+                    break;
+                case hashString("stop"):
+                    if (playing)
+                        stopMusic();
+                    else std::cerr << "[tacrad] [log.error] Not currently playing music! Use \"play\" to start media.\n";
+                    break;
+                case hashString("next"):
+                case hashString("n"):
+                case hashString(">>"):
+                    goto PlaylistNext;
+                case hashString("playlist"):
+                case hashString("playl"):
+                case hashString("pl"):
+                    if (cmd.size() < 2) [[unlikely]]
+                    {
+                        std::cerr << "[tacrad] [log.error] \"playl\" Takes at least a flag argument!\n";
+                        break;
+                    }
+
+                    switch (hashString(cmd[1]))
+                    {
+                    case hashString("--next"):
+                    case hashString("-n"):
+                        {
+                            if (cmd.size() > 2)
+                                std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                            PlaylistNext:
+                            bool wasPaused = paused;
+                            if (playing)
+                                stopMusic();
+                            switch (type)
+                            {
+                            case PlaylistType::Sequential:
+                                tryPlayNextAlphabetical(musicName, wasPaused);
+                                break;
+                            case PlaylistType::Shuffle:
+                                tryPlayNextShuffle(wasPaused);
+                                break;
+                            case PlaylistType::Queued:
+                                incrQueuePos();
+                                tryPlayNextQueued(wasPaused);
+                                break;
+                            }
+                        }
+                        break;
+                    case hashString("--shuffle"):
+                    case hashString("-sh"):
+                        if (cmd.size() > 2)
+                        {
+                            std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                            break;
+                        }
+                        type = PlaylistType::Shuffle;
+                        break;
+                    case hashString("--Sequential"):
+                    case hashString("--seq"):
+                    case hashString("-sq"):
+                        if (cmd.size() > 2)
+                        {
+                            std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                            break;
+                        }
+                        type = PlaylistType::Sequential;
+                        break;
+                    case hashString("--queued"):
+                    case hashString("-q"):
+                        if (cmd.size() > 2)
+                        {
+                            std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                            break;
+                        }
+                        type = PlaylistType::Queued;
+                        break;
+                    case hashString("--push"):
+                    case hashString("-p"):
+                        {
+                            if (cmd.size() < 3)
+                            {
+                                std::cerr << "[tacrad] [log.error] \"playl --push\" requires at least a one-word music track query!\n";
+                                break;
+                            }
+                            std::string lookupName = cmd[2];
+                            for (auto& word : std::span(++++++cmd.begin(), cmd.end()))
+                            {
+                                lookupName.push_back(' ');
+                                lookupName.append(word);
+                            }
+                            fs::path path;
+                            std::string name = musicLookup(lookupName, path);
+                            queue.push_back(std::make_pair(name, std::move(path)));
+                            std::cout << "[tacrad] [log.info] Adding \"" << name << "\" to playlist music queue.\n";
+                        }
+                        break;
+                    case hashString("--list"):
+                    case hashString("-l"):
+                        {
+                            if (cmd.size() > 2)
+                            {
+                                std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                                break;
+                            }
+
+                            if (!queue.empty())
+                            {
+                                std::string playlist;
+                                size_t i = 1;
+                                for (auto it = queue.begin(); it != queue.end(); ++it)
+                                {
+                                    playlist.append(std::to_string(i++)).append(". ").append(it->first);
+                                    if (it == queuePos)
+                                        playlist.append(" < You Are Here");
+                                    playlist.push_back('\n');
+                                }
+                                std::cout << "[tacrad] [log.info]\n" << playlist;
+                            }
+                            else std::cout << "[tacrad] [log.info] <Empty Playlist>\n";
+                        }
+                        break;
+                    case hashString("--index"):
+                    case hashString("-i"):
+                        {
+                            if (cmd.size() > 3)
+                            {
+                                std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                                break;
+                            }
+                            if (cmd.size() < 3)
+                            {
+                                std::cerr << "[tacrad] [log.error] \"playl --index\" requires an index argument!\n";
+                                break;
+                            }
+
+                            size_t pos;
+                            int diff = std::stoi(cmd[2], &pos);
+                            if (pos != cmd[2].size() || pos < 1)
+                            {
+                                std::cerr << "[tacrad] [log.error] Invalid index argument given to \"playl --index\"!\n";
+                                break;
+                            }
+                            if (pos > queue.size())
+                            {
+                                std::cerr << "[tacrad] [log.error] Index argument given to \"playl --index\" out of range!\n";
+                                break;
+                            }
+
+                            auto queryPos = queue.begin();
+                            std::advance(queryPos, diff - 1);
+
+                            if (queuePos != queryPos)
+                            {
+                                queuePos = queryPos;
+                                bool wasPaused = paused;
+                                if (playing)
+                                    stopMusic();
+                                tryPlayNextQueued(paused);
+                            }
+                        }
+                        break;
+                    case hashString("--loop"):
+                    case hashString("-lp"):
+                        switch (cmd.size())
+                        {
+                        case 2:
+                            loop = !loop;
+                            goto LoopSet;
+                        case 3:
+                            switch (hashString(cmd[2]))
+                            {
+                            case hashString("true"):
+                            case hashString("t"):
+                            case hashString("1"):
+                                loop = true;
+                                goto LoopSet;
+                            case hashString("false"):
+                            case hashString("f"):
+                            case hashString("0"):
+                                loop = false;
+                                goto LoopSet;
+                            default:
+                                std::cerr << "[tacrad] [log.error] Unknown boolean argument given to \"playl\"!\n";
+                            }
+                            break;
+                        LoopSet:
+                            std::cout << "[tacrad] [log.info] Playlist queue looping set to " << (loop ? "true" : "false") << "!\n";
+                            break;
+                        default:
+                            std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                        }
+                        break;
+                    case hashString("--clear"):
+                    case hashString("-c"):
+                        if (cmd.size() > 2)
+                        {
+                            std::cerr << "[tacrad] [log.error] Extra arguments given to \"playl\"!\n";
+                            break;
+                        }
+                        queue.clear();
+                        queuePos = queue.end();
+                        std::cout << "[tacrad] [log.info] Clearing playlist queue.\n";
+                        break;
+                    default:
+                        std::cerr << "[tacrad] [log.warn] Unknown flag argument given to \"playl\".\n";
+                    }
+                    break;
+                case hashString("exit"):
+                    if (playing)
+                        stopMusic();
+                    readThread.join();
+                    goto Break;
+                default:
+                    for (char c : cmd[0])
+                    {
+                        if (!std::isspace(c))
+                        {
+                            std::cerr << "[tacrad] [log.error] Unknown command! Enter \"help\" to view a list of available commands!\n";
+                            break;
+                        }
                     }
                 }
             }
@@ -646,6 +795,7 @@ exit
                         break;
                     case PlaylistType::Queued:
                         stopMusic();
+                        incrQueuePos();
                         tryPlayNextQueued();
                         break;
                     }
