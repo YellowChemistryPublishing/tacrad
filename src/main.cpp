@@ -195,7 +195,7 @@ int main()
     {
         fs::path file;
         std::string name(1, 'z');
-        if (prev.empty())
+        if (prev.empty() && fs::exists("music/"))
         {
             for (auto it : fs::recursive_directory_iterator("music/"))
             {
@@ -209,9 +209,10 @@ int main()
         else
         {
             std::vector<std::pair<std::string, fs::path>> tracks;
-            for (auto it : fs::recursive_directory_iterator("music/"))
-                if (it.is_regular_file())
-                    tracks.push_back(std::make_pair(it.path().stem().string(), it.path()));
+            if (fs::exists("music/"))
+                for (auto it : fs::recursive_directory_iterator("music/"))
+                    if (it.is_regular_file())
+                        tracks.push_back(std::make_pair(it.path().stem().string(), it.path()));
             std::sort(tracks.begin(), tracks.end(), [](auto a, auto b)
             {
                 return a.second < b.second;
@@ -256,9 +257,10 @@ int main()
     auto tryPlayNextShuffle = [&](bool wasPaused = false) -> void
     {
         size_t ct = 0;
-        for (auto& dir : fs::recursive_directory_iterator("music/"))
-            if (dir.path().stem().string() != musicName)
-                ++ct;
+        if (fs::exists("music/"))
+            for (auto& dir : fs::recursive_directory_iterator("music/"))
+                if (dir.path().stem().string() != musicName)
+                    ++ct;
         if (ct != 0)
         {
             More:
@@ -746,9 +748,14 @@ exit
             .append(sdFloat((float)ma_sound_get_time_in_pcm_frames(&music) / (float)ma_engine_get_sample_rate(&engine)))
             .append(" / ")
             .append(sdFloat(musicLen))
-            .append(" (")
-            .append(std::to_string((int32_t)musicLen / 60))
-            .append("min ")
+            .append(" (");
+            if (int32_t mins = (int32_t)musicLen / 60; mins > 0)
+            {
+                playBarBeg
+                .append(std::to_string(mins))
+                .append("min ");
+            }
+            playBarBeg
             .append(std::to_string(int32_t(musicLen + 0.5f) % 60))
             .append("s)  ")
             .append(sdFloat(ma_engine_get_volume(&engine), 2))
