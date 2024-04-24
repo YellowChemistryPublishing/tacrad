@@ -22,7 +22,7 @@ file(GLOB_RECURSE SRCS
 add_executable(tacrad ${SRCS})
 
 target_include_directories(tacrad PRIVATE "src/")
-target_link_libraries(tacrad PRIVATE Firework.Runtime.CoreLib Firework.Runtime.GL Firework.Components.Core2D)
+target_link_libraries(tacrad PRIVATE Firework.Components.Core2D)
 
 set_target_properties(tacrad PROPERTIES CXX_STANDARD 23)
 

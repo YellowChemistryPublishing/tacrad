@@ -40,6 +40,9 @@ UR"(tacrad music player [Version 1.0.0]
 Welcome to the tacrad CLI! (Enter "help" for details.)
 )";
 
+    std::vector<std::u32string> cmdHistory;
+    size_t nextHistoryIndex = SIZE_MAX;
+
     float nextTimePoint = 0.0f;
     bool showCursorThisFrame = true;
 
@@ -187,6 +190,13 @@ Welcome to the tacrad CLI! (Enter "help" for details.)
                 for (auto it : fs::recursive_directory_iterator("music/"))
                     if (it.is_regular_file())
                         tracks.push_back(std::make_pair(it.path().stem().u32string(), it.path()));
+
+            if (tracks.empty())
+            {
+                this->writeLine(U"[log.info] No music to play. (Add some!)\n");
+                return;
+            }
+
             std::sort(tracks.begin(), tracks.end(), [](auto a, auto b)
             {
                 return a.second < b.second;
@@ -262,12 +272,13 @@ Welcome to the tacrad CLI! (Enter "help" for details.)
             }
             goto More;
         }
+        else this->writeLine(U"[log.info] No music to play. (Add some!)\n");
     }
     void incrQueuePos()
     {
         if (queuePos == queue.end())
             queuePos = queue.begin();
-        else if (++auto(queuePos) == queue.end())
+        else if (++decltype(queuePos)(queuePos) == queue.end())
         {
             if (!loop)
             {
@@ -345,6 +356,10 @@ Welcome to the tacrad CLI! (Enter "help" for details.)
                 ret.push_back(std::u32string(str.begin() + beg, str.end()));
             return std::move(ret);
         };
+
+        if (this->cmdHistory.empty() || this->cmdHistory.back() != command)
+            this->cmdHistory.emplace_back(command.begin(), command.end());
+        this->nextHistoryIndex = this->cmdHistory.size() - 1;
 
         std::vector<std::u32string> cmd = split(command);
 
@@ -501,7 +516,11 @@ exit
                         break;
                     }
 
-                    std::basic_stringstream ss(cmd[1]);
+                    std::u32string vStr = cmd[1];
+                    std::wstring wvStr; wvStr.reserve(vStr.size());
+                    for (auto c : vStr)
+                        wvStr.push_back(c);
+                    std::wistringstream ss(std::move(wvStr));
                     float v; ss >> v;
                     ma_engine_set_volume(&engine, v);
                 }
@@ -613,9 +632,13 @@ exit
                             size_t i = 1;
                             for (auto it = queue.begin(); it != queue.end(); ++it)
                             {
-                                std::basic_ostringstream<char32_t> ss;
+                                std::wostringstream ss;
                                 ss << i++;
-                                playlist.append(ss.str()).append(U". ").append(it->first);
+                                std::wstring wiStr = std::move(ss).str();
+                                std::u32string iStr; iStr.reserve(wiStr.size());
+                                for (auto c : wiStr)
+                                    iStr.push_back(c);
+                                playlist.append(iStr).append(U". ").append(it->first);
                                 if (it == queuePos)
                                     playlist.append(U" < You Are Here");
                                 playlist.push_back(U'\n');
@@ -694,9 +717,13 @@ exit
                         break;
                     LoopSet:
                         {
-                            std::basic_ostringstream<char32_t> ss;
-                            ss << U"[log.info] Playlist queue looping set to " << (loop ? U"true" : U"false") << U'!';
-                            this->writeLine(ss.str());
+                            std::wostringstream ss;
+                            ss << L"[log.info] Playlist queue looping set to " << (loop ? L"true" : L"false") << L'!';
+                            std::wstring outStr = ss.str();
+                            std::u32string out; out.reserve(outStr.size());
+                            for (auto c : outStr)
+                                out.push_back(c);
+                            this->writeLine(out);
                         }
                         break;
                     default:
@@ -801,6 +828,72 @@ extern struct TacradCLISystem
                 c = U'0';
             if (key == Key::Space || key == Key::NumpadSpace)
                 c = U' ';
+            switch (key)
+            {
+            case Key::BackQuote:
+                c = U'`';
+                break;
+            case Key::ExclamationMark:
+            case Key::NumpadExclamationMark:
+                c = U'!';
+                break;
+            case Key::AtSign:
+            case Key::NumpadAtSign:
+                c = U'@';
+                break;
+            case Key::Hashtag:
+            case Key::NumpadHashtag:
+                c = U'#';
+                break;
+            case Key::Dollar:
+                c = U'$';
+                break;
+            case Key::Percent:
+            case Key::NumpadPercent:
+                c = U'%';
+                break;
+            case Key::Caret:
+                c = U'^';
+                break;
+            case Key::Ampersand:
+            case Key::NumpadAmpersand:
+                c = U'&';
+                break;
+            case Key::Asterisk:
+                c = U'*';
+                break;
+            case Key::LeftParenthesis:
+            case Key::NumpadLeftParenthesis:
+                c = U'(';
+                break;
+            case Key::RightParenthesis:
+            case Key::NumpadRightParenthesis:
+                c = U')';
+                break;
+            case Key::Minus:
+            case Key::NumpadMinus:
+                c = U'-';
+                break;
+            case Key::Underscore:
+                c = U'_';
+                break;
+            case Key::Plus:
+            case Key::NumpadPlus:
+                c = U'+';
+                break;
+            case Key::Equals:
+            case Key::NumpadEquals:
+                c = U'=';
+                break;
+            case Key::Comma:
+            case Key::NumpadComma:
+                c = U',';
+                break;
+            case Key::Period:
+            case Key::NumpadPeriod:
+                c = U'.';
+                break;
+            }
 
             if (c != 0) [[likely]]
             {
@@ -818,6 +911,46 @@ extern struct TacradCLISystem
                     if (std::u32string_view(cli->str.end() - TacradCLI::lineInit.size(), cli->str.end()) != TacradCLI::lineInit)
                     {
                         cli->str.pop_back();
+                        cli->postEntry();
+                    }
+                });
+                break;
+            case Key::UpArrow:
+                EntityManager2D::foreachEntityWithAll<TacradCLI>([&](Entity2D* entity, TacradCLI* cli)
+                {
+                    if (!cli->cmdHistory.empty())
+                    {
+                        size_t i = cli->str.size() - TacradCLI::lineInit.size();
+                        while (std::u32string_view(&cli->str[i], TacradCLI::lineInit.size()) != TacradCLI::lineInit)
+                        {
+                            cli->str.pop_back();
+                            --i;
+                        }
+                        cli->str.append(cli->cmdHistory[cli->nextHistoryIndex]);
+                        if (cli->nextHistoryIndex > 0)
+                            --cli->nextHistoryIndex;
+
+                        cli->postEntry();
+                    }
+                });
+                break;
+            case Key::DownArrow:
+                EntityManager2D::foreachEntityWithAll<TacradCLI>([&](Entity2D* entity, TacradCLI* cli)
+                {
+                    if (!cli->cmdHistory.empty())
+                    {
+                        if (cli->nextHistoryIndex + 1 < cli->cmdHistory.size())
+                        {
+                            size_t i = cli->str.size() - TacradCLI::lineInit.size();
+                            while (std::u32string_view(&cli->str[i], TacradCLI::lineInit.size()) != TacradCLI::lineInit)
+                            {
+                                cli->str.pop_back();
+                                --i;
+                            }
+                            ++cli->nextHistoryIndex;
+                            cli->str.append(cli->cmdHistory[cli->nextHistoryIndex]);
+                        }
+
                         cli->postEntry();
                     }
                 });
