@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 
 project(tacrad)
 
-set(FIREWORK_BUILD_EXAMPLES OFF CACHE INTERNAL "" FORCE)
+set(FIREWORK_BUILD_EXAMPLES ON CACHE INTERNAL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/deps/Firework.Runtime")
 
 add_custom_target(PackageTacradAssets

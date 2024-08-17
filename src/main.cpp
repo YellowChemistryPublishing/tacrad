@@ -25,15 +25,17 @@ static_assert(sizeof(float) == 4); // #include <stdfloat>
 
 namespace fs = std::filesystem;
 
+using namespace Firework::Internal;
+
 inline Entity2D* textEntry;
 inline TacradCLI* textEntryInput;
 
 int main()
 {
+    Application::setTargetFrameRate(30);
+    
     EngineEvent::OnInitialize += []
     {
-        Application::setTargetFrameRate(20);
-
         textEntry = new Entity2D();
         textEntry->name = L"Text Entry Field";
 
@@ -42,6 +44,6 @@ int main()
         
         Debug::printHierarchy();
     };
-
+    
     return 0;
 }
