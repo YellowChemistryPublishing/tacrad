@@ -19,11 +19,15 @@
 #include <GL/Renderer.h>
 #include <Objects/Entity2D.h>
 
+#define CONSOLE_PADDING_SIDE 20.0f
+#define CONSOLE_PADDING_TOP 2.0f
+
+#define CONSOLE_DROP_SHADOW_HEIGHT 5.0f
+
 namespace fs = std::filesystem;
 
 using namespace Firework;
 using namespace Firework::Internal;
-using namespace Firework::Mathematics;
 using namespace Firework::GL;
 using namespace Firework::PackageSystem;
 
@@ -45,30 +49,6 @@ Welcome to the tacrad CLI! (Enter "help" for details.)
     Text* _text;
     std::u32string str { TacradCLI::conInit.begin(), TacradCLI::conInit.end() };
 
-    RectFloat updateRect;
-
-    std::vector<std::u32string> cmdHistory;
-    size_t nextHistoryIndex = SIZE_MAX;
-
-    float nextTimePoint = 0.0f;
-    bool showCursorThisFrame = true;
-
-    bool seekIfOutOfFrame = false;
-    float scrollTop = 0.0f;
-
-    // In **characters**.
-    uint32_t width();
-
-    void postEntry();
-    void pushLine();
-    void writeLine(std::u32string_view line);
-
-    // CLI ^ / Music Player v
-
-    inline static std::random_device seeder;
-    inline static std::mt19937 randEngine { seeder() };
-    inline static std::uniform_real_distribution<float> dist { 0.0f, 1.0f };
-
     struct Command
     {
         void (TacradCLI::* execute)(const std::vector<std::u32string>& cmd);
@@ -79,47 +59,23 @@ Welcome to the tacrad CLI! (Enter "help" for details.)
     };
     static std::vector<std::pair<uint64_t, Command>> commands;
 
-    inline static ma_engine engine;
-    ma_sound music;
-    
-    bool playing = false;
-    bool paused = false;
-    bool loop = false;
-    enum class PlaylistType
-    {
-        Sequential,
-        Shuffle,
-        Queued
-    } type = PlaylistType::Sequential;
-    
-    ma_uint64 prevFrame = 0;
-    ma_uint64 frameLen;
-    float musicLen;
-    std::u32string musicName;
+    std::vector<std::u32string> cmdHistory;
+    size_t nextHistoryIndex = SIZE_MAX;
 
-    std::list<std::pair<std::u32string, fs::path>> queue;
-    decltype(queue)::iterator queuePos = queue.end();
-    
-    inline static std::u32string toLower(std::u32string_view str)
-    {
-        std::u32string ret(str.begin(), str.end());
-        std::transform(ret.begin(), ret.end(), ret.begin(), [](char32_t c){ return (char32_t)std::tolower((int)c); });
-        return ret;
-    }
-    static std::u32string musicLookup(std::u32string_view name, fs::path& file);
+    float nextTimePoint = 0.0f;
+    bool showCursorThisFrame = true;
 
-    void startMusic(std::u32string_view query);
-    void tryPlayNextAlphabetical(std::u32string_view prev, bool wasPaused);
-    void stopMusic();
-    void tryPlayNextShuffle(bool wasPaused = false);
-    void incrQueuePos();
-    void tryPlayNextQueued(bool wasPaused = false);
+    bool seekIfOutOfFrame = false;
 
-    void musicResume();
-    void musicPause();
-    
+    // In **characters**.
+    uint32_t width();
+
+    void postEntry();
+    void pushLine();
+
     void onCommand(std::u32string_view command);
     void commandHelp(const std::vector<std::u32string>& cmd);
+    void commandClear(const std::vector<std::u32string>& cmd);
     void commandPlayOrTogglePlaying(const std::vector<std::u32string>& cmd);
     void commandResumeOrPlay(const std::vector<std::u32string>& cmd);
     void commandPlay(const std::vector<std::u32string>& cmd);
@@ -140,6 +96,8 @@ public:
         [this]() -> float { return this->_text->fontSize; },
         [this](float value) { this->_text->fontSize = value; }
     };
+    
+    void writeLine(std::u32string_view line);
 
     friend struct ::TacradCLISystem;
 };

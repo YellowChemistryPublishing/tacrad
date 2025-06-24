@@ -1,38 +1,61 @@
 #include "TacradCLI.h"
 
+#include <span>
+
+#include <Components/Mask.h>
+
+#include <DropShadow.h>
+#include <MusicPlayer.h>
+
 using namespace Firework;
 
 void TacradCLI::onCreate()
 {
-    this->updateRect = RectFloat(Window::pixelHeight() / 2, Window::pixelWidth() / 2, -Window::pixelHeight(), -Window::pixelWidth() / 2);
-
-    this->rectTransform()->position = Vector2(0.0f, Window::pixelHeight() / 2);
-    this->rectTransform()->rect = RectFloat
+    this->entity()->addComponent<Mask>();
+    
+    Entity2D* consoleTopShadow = new Entity2D();
+    consoleTopShadow->parent = this->entity();
+    consoleTopShadow->name = L"Console Drop Shadow";
+    consoleTopShadow->rectTransform()->localPosition = sysm::vector2(0.0f, 0.0f);
+    consoleTopShadow->rectTransform()->rect = RectFloat
     (
-        0, Window::pixelWidth() / 2,
-        -Window::pixelHeight(), -Window::pixelWidth() / 2
+        0, this->rectTransform()->rect().right,
+        -CONSOLE_DROP_SHADOW_HEIGHT, this->rectTransform()->rect().left
     );
-
-    this->entity()->addComponent<Panel>()->color = Color(0.0f, 0.0f, 0.0f, 1.0f);
+    consoleTopShadow->rectTransform()->rectAnchor = RectFloat(0.0f, 1.0f, 0.0f, 1.0f);
+    DropShadow* shadow = consoleTopShadow->addComponent<DropShadow>();
 
     Entity2D* textEntity = new Entity2D();
     textEntity->parent = this->entity();
-
-    textEntity->rectTransform()->rect = this->rectTransform()->rect();
+    textEntity->name = L"Text Object";
+    
     this->_text = textEntity->addComponent<Text>();
-    this->_text->rectTransform()->localPosition = Vector2(0.0f, 0.0f);
+    
     this->_text->fontFile = TacradCLI::font;
     this->_text->horizontalAlign = TextAlign::Minor;
     this->_text->verticalAlign = TextAlign::Minor;
 
     this->pushLine();
+
+    this->_text->rectTransform()->localPosition = sysm::vector2(0.0f, -CONSOLE_PADDING_TOP);
+    this->_text->rectTransform()->rect = RectFloat
+    (
+        0, this->rectTransform()->rect().right - CONSOLE_PADDING_SIDE,
+        -this->_text->calculateBestFitHeight(), this->rectTransform()->rect().left + CONSOLE_PADDING_SIDE
+    );
+    this->_text->rectTransform()->rectAnchor = RectFloat(0.0f, 1.0f, 0.0f, 1.0f);
 }
 
 uint32_t TacradCLI::width()
 {
-    Typography::Font& font = this->_text->fontFile()->fontHandle();
-    Typography::GlyphMetrics metrics = font.getGlyphMetrics(font.getGlyphIndex(U' ')); // Monospace font or we're screwed.
-    return uint32_t((this->rectTransform()->rect().right - this->rectTransform()->rect().left) / ((float)metrics.advanceWidth * (float)this->_text->fontSize / float(font.ascent - font.descent)));
+    TrueTypeFontPackageFile* fontFile = this->_text->fontFile();
+    if (fontFile)
+    {
+        Typography::Font& font = fontFile->fontHandle();
+        Typography::GlyphMetrics metrics = font.getGlyphMetrics(font.getGlyphIndex(U' ')); // Monospace font or we're screwed.
+        return uint32_t(this->rectTransform()->rect().width() / ((float)metrics.advanceWidth * (float)this->_text->fontSize / float(font.ascent - font.descent)));
+    }
+    else return uint32_t(this->rectTransform()->rect().width());
 }
 
 void TacradCLI::postEntry()
@@ -40,9 +63,6 @@ void TacradCLI::postEntry()
     this->nextTimePoint = 0.0f;
     this->showCursorThisFrame = true;
     this->seekIfOutOfFrame = true;
-
-    this->updateRect.top = Math::clamp<float>(this->_text->rectTransform()->position().y + this->_text->rectTransform()->rect().bottom + this->_text->fontSize(), this->updateRect.top, Window::pixelHeight() / 2);
-    this->updateRect.bottom = Math::clamp<float>(this->_text->rectTransform()->position().y + this->_text->rectTransform()->rect().bottom, this->updateRect.bottom, -Window::pixelHeight() / 2);
 }
 void TacradCLI::pushLine()
 {
@@ -54,225 +74,6 @@ void TacradCLI::writeLine(std::u32string_view line)
     this->str.push_back(U'\n');
     this->str.append(line);
     this->postEntry();
-}
-
-std::u32string TacradCLI::musicLookup(std::u32string_view name, fs::path& file)
-{
-    std::u32string compare; compare.append(name);
-    for (auto& c : compare)
-        c = std::tolower(c);
-    
-    if (fs::exists("music/"))
-    {
-        for (auto& dir : fs::recursive_directory_iterator("music/"))
-        {
-            if (dir.is_regular_file())
-            {
-                if (toLower(dir.path().stem().u32string()) == compare)
-                {
-                    file = dir.path();
-                    return dir.path().stem().u32string();
-                }
-            }
-        }
-        for (auto& dir : fs::recursive_directory_iterator("music/"))
-        {
-            if (dir.is_regular_file())
-            {
-                if (toLower(dir.path().stem().u32string()).starts_with(compare))
-                {
-                    file = dir.path();
-                    return dir.path().stem().u32string();
-                }
-            }
-        }
-        for (auto& dir : fs::recursive_directory_iterator("music/"))
-        {
-            if (dir.is_regular_file())
-            {
-                if (toLower(dir.path().stem().u32string()).contains(compare))
-                {
-                    file = dir.path();
-                    return dir.path().stem().u32string();
-                }
-            }
-        }
-    }
-
-    file = "err.";
-    return U"Error! (This will end poorly later.)";
-}
-
-void TacradCLI::startMusic(std::u32string_view query)
-{
-    fs::path musicFile;
-    std::u32string _musicName = musicLookup(query, musicFile);
-    if (ma_sound_init_from_file(&engine, musicFile.string().c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
-    {
-        ma_sound_start(&music);
-        ma_sound_get_length_in_pcm_frames(&music, &frameLen);
-        ma_sound_get_length_in_seconds(&music, &musicLen);
-        musicName = _musicName;
-        playing = true;
-    }
-    else this->writeLine(U"[log.error] Music query doesn't exist!\n");
-}
-void TacradCLI::tryPlayNextAlphabetical(std::u32string_view prev, bool wasPaused)
-{
-    fs::path file;
-    std::u32string name(1, U'z');
-    if (prev.empty() && fs::exists("music/"))
-    {
-        for (auto it : fs::recursive_directory_iterator("music/"))
-        {
-            if (it.path().stem().u32string() < name)
-            {
-                file = it.path();
-                name = file.stem().u32string();
-            }
-        }
-    }
-    else
-    {
-        std::vector<std::pair<std::u32string, fs::path>> tracks;
-        if (fs::exists("music/"))
-            for (auto it : fs::recursive_directory_iterator("music/"))
-                if (it.is_regular_file())
-                    tracks.push_back(std::make_pair(it.path().stem().u32string(), it.path()));
-
-        if (tracks.empty())
-        {
-            this->writeLine(U"[log.info] No music to play. (Add some!)\n");
-            return;
-        }
-
-        std::sort(tracks.begin(), tracks.end(), [](auto a, auto b)
-        {
-            return a.second < b.second;
-        });
-        auto next = tracks.end();
-        for (auto it = tracks.begin(); it != tracks.end(); ++it)
-        {
-            if (it->first == prev)
-            {
-                next = it;
-                break;
-            }
-        }
-        ++next;
-        if (next == tracks.end())
-        {
-            this->writeLine(U"[log.info] End of playlist!\n");
-            return;
-        }
-        name = next->first;
-        file = next->second;
-    }
-    if (ma_sound_init_from_file(&engine, file.string().c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
-    {
-        ma_sound_get_length_in_pcm_frames(&music, &frameLen);
-        ma_sound_get_length_in_seconds(&music, &musicLen);
-        musicName = std::move(name);
-        playing = true;
-        if (!wasPaused)
-            ma_sound_start(&music);
-        else paused = true;
-    }
-    else this->writeLine(std::u32string(U"[log.error] Music query doesn't exist! [dev] name: ").append(name).append(U", file: ").append(file.u32string()).append(U"\n"));
-}
-void TacradCLI::stopMusic()
-{
-    ma_sound_stop(&music);
-    ma_sound_uninit(&music);
-    playing = false;
-    paused = false;
-}
-void TacradCLI::tryPlayNextShuffle(bool wasPaused)
-{
-    size_t ct = 0;
-    if (fs::exists("music/"))
-        for (auto& dir : fs::recursive_directory_iterator("music/"))
-            if (dir.path().stem().u32string() != musicName)
-                ++ct;
-    if (ct != 0)
-    {
-        More:
-        for (auto& dir : fs::recursive_directory_iterator("music/"))
-        {
-            if (dir.is_regular_file() && dir.path().stem().u32string() != musicName && dist(randEngine) < 1.0f / (float)ct)
-            {
-                fs::path musicFile;
-                std::u32string _musicName = musicLookup(dir.path().stem().u32string(), musicFile);
-                auto t = dir.path().stem().string();
-                if (ma_sound_init_from_file(&engine, musicFile.string().c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
-                {
-                    ma_sound_get_length_in_pcm_frames(&music, &frameLen);
-                    ma_sound_get_length_in_seconds(&music, &musicLen);
-                    musicName = std::move(_musicName);
-                    playing = true;
-                    if (!wasPaused)
-                        ma_sound_start(&music);
-                    else paused = true;
-
-                    return;
-                }
-                else this->writeLine(U"[log.error] Failed to load next track, shuffling for new one.\n");
-            }
-        }
-        goto More;
-    }
-    else this->writeLine(U"[log.info] No music to play. (Add some!)\n");
-}
-void TacradCLI::incrQueuePos()
-{
-    if (queuePos == queue.end())
-        queuePos = queue.begin();
-    else if (++decltype(queuePos)(queuePos) == queue.end())
-    {
-        if (!loop)
-        {
-            this->writeLine(U"[log.info] End of playlist!\n");
-            return;
-        }
-        else queuePos = queue.begin();
-    }
-    else ++queuePos;
-}
-void TacradCLI::tryPlayNextQueued(bool wasPaused)
-{
-    if (queue.empty())
-    {
-        this->writeLine(U"[log.warn] Empty playlist!\n");
-        return;
-    }
-
-    decltype(queuePos) prev = queuePos;
-
-    goto FirstTry;
-    {
-        Retry:
-        incrQueuePos();
-
-        if (queuePos == prev)
-            return;
-    }
-    FirstTry:
-    
-    if (ma_sound_init_from_file(&engine, queuePos->second.string().c_str(), 0, nullptr, nullptr, &music) == MA_SUCCESS)
-    {
-        ma_sound_get_length_in_pcm_frames(&music, &frameLen);
-        ma_sound_get_length_in_seconds(&music, &musicLen);
-        musicName = queuePos->first;
-        playing = true;
-        if (!wasPaused)
-            ma_sound_start(&music);
-        else paused = true;
-    }
-    else
-    {
-        this->writeLine(std::u32string(U"[log.error] Couldn't load next music track in queue, skipping! [dev] name: ").append(queuePos->first).append(U", path: ").append(queuePos->second.u32string()).append(U"\n"));
-        goto Retry;
-    }
 }
 
 // theft https://stackoverflow.com/questions/48896142/is-it-possible-to-get-hash-values-as-compile-time-constants
@@ -307,6 +108,17 @@ UR"(    desc:
         }
     },
     {
+        hashString(U"clear"),
+        Command
+        {
+            .execute = &TacradCLI::commandClear,
+            .name = U"clear",
+            .description =
+UR"(    desc:
+    Clear the console.)"
+        }
+    },
+    {
         hashString(U"p"),
         Command
         {
@@ -333,7 +145,7 @@ UR"(    desc:
             .execute = &TacradCLI::commandPlay,
             .name = U"play",
             .description =
-UR"(    args: [trackName]
+UR"(    args: [trackName] [trackName...]
         trackName: The name of the music item to play, or a query for one.
     desc:
     Plays a track.)"
@@ -488,6 +300,16 @@ UR"(    args: [flag]
         --next [alias: -n cmdalias: next, n, >>]: Play the next track on the list.
         --shuffle [alias: -sh]: Set the playlist to shuffle mode.
         --sequential [alias: --seq, -sq]: Set the playlist to sequential mode.
+        --queued [alias: -q]: Set the playlist to queued mode.
+        --push [alias: -p]: Push a track to the end of the playlist music queue.
+        --list [alias: -l]: List the tracks in the playlist music queue.
+        --index [alias: -i]: Set the track to play in the playlist music queue.
+        --loop [alias: -lp]:
+            Set music items to loop or autoplay. If no bool argument is given, the state is toggled.
+            args: [opt: state]
+                state: Should the playlist loop / autoplay. i.e. true, 1, false, 0
+        --remove [alias: -r]: Remove a track from the playlist music queue.
+        --clear [alias: -c]: Clear the playlist music queue.
     desc:
     Playlist related commands.)"
         }
@@ -514,17 +336,6 @@ UR"(    desc:
         }
     }
 };
-
-void TacradCLI::musicResume()
-{
-    ma_sound_start(&music);
-    paused = false;
-}
-void TacradCLI::musicPause()
-{
-    ma_sound_stop(&music);
-    paused = true;
-}
 
 void TacradCLI::commandHelp(const std::vector<std::u32string>& cmd)
 {
@@ -559,20 +370,26 @@ void TacradCLI::commandHelp(const std::vector<std::u32string>& cmd)
     }
     this->writeLine(helpText);
 }
+void TacradCLI::commandClear(const std::vector<std::u32string>& cmd)
+{
+    this->str.clear();
+    this->str.append(TacradCLI::conInit);
+    this->postEntry();
+}
 void TacradCLI::commandPlayOrTogglePlaying(const std::vector<std::u32string>& cmd)
 {
-    if (cmd.size() == 1 && playing)
+    if (cmd.size() == 1 && MusicPlayer::playing)
     {
-        if (paused)
-            this->musicResume();
-        else this->musicPause();
+        if (MusicPlayer::paused)
+            MusicPlayer::musicResume();
+        else MusicPlayer::musicPause();
     }
     else this->commandPlay(cmd);
 }
 void TacradCLI::commandResumeOrPlay(const std::vector<std::u32string>& cmd)
 {
-    if (cmd.size() == 1 && paused)
-        this->musicResume();
+    if (cmd.size() == 1 && MusicPlayer::paused)
+        MusicPlayer::musicResume();
     else this->commandPlay(cmd);
 }
 void TacradCLI::commandPlay(const std::vector<std::u32string>& cmd)
@@ -583,8 +400,8 @@ void TacradCLI::commandPlay(const std::vector<std::u32string>& cmd)
         return;
     }
 
-    if (playing)
-        stopMusic();
+    if (MusicPlayer::playing)
+        MusicPlayer::stopMusic();
 
     std::u32string lookupName = cmd[1];
     for (auto& word : std::span(++++cmd.begin(), cmd.end()))
@@ -592,7 +409,7 @@ void TacradCLI::commandPlay(const std::vector<std::u32string>& cmd)
         lookupName.push_back(U' ');
         lookupName.append(word);
     }
-    startMusic(lookupName);
+    MusicPlayer::startMusic(lookupName);
 }
 void TacradCLI::commandResume(const std::vector<std::u32string>& cmd)
 {
@@ -602,8 +419,8 @@ void TacradCLI::commandResume(const std::vector<std::u32string>& cmd)
         return;
     }
 
-    if (playing)
-        this->musicResume();
+    if (MusicPlayer::playing)
+        MusicPlayer::musicResume();
     else this->writeLine(U"[log.error] Not currently playing music! Use \"play\" and \"stop\" to change media.\n");
 }
 void TacradCLI::commandPause(const std::vector<std::u32string>& cmd)
@@ -614,8 +431,8 @@ void TacradCLI::commandPause(const std::vector<std::u32string>& cmd)
         return;
     }
 
-    if (playing)
-        this->musicPause();
+    if (MusicPlayer::playing)
+        MusicPlayer::musicPause();
     else this->writeLine(U"[log.error] Not currently playing music! Use \"play\" and \"stop\" to change media.\n");
 }
 void TacradCLI::commandSeek(const std::vector<std::u32string>& cmd)
@@ -631,18 +448,22 @@ void TacradCLI::commandSeek(const std::vector<std::u32string>& cmd)
         return;
     }
 
-    if (playing)
+    if (MusicPlayer::playing)
     {
-        std::wstring qStr; qStr.reserve(cmd[1].size());
-        for (auto c : cmd[1])
-            qStr.push_back(c);
-        std::wstringstream ss(std::move(qStr));
-        float q; ss >> q;
-        double seekQuery = (double)ma_engine_get_sample_rate(&engine) * q;
-        if (seekQuery >= 0.0 && seekQuery <= frameLen)
+        std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> conv;
+        char* readEnd = nullptr;
+        std::string convBytes = conv.to_bytes(cmd[1]);
+        float q = std::strtof(convBytes.c_str(), &readEnd);
+    
+        if ((readEnd - convBytes.data()) != convBytes.size())
         {
-            ma_sound_seek_to_pcm_frame(&music, (ma_uint64)seekQuery);
+            this->writeLine(U"[log.error] Invalid index argument given to \"seek\"!\n");
+            return;
         }
+
+        float seekQuery = (float)ma_engine_get_sample_rate(&MusicPlayer::engine) * q;
+        if (seekQuery >= 0.0f && seekQuery <= MusicPlayer::frameLen)
+            ma_sound_seek_to_pcm_frame(&MusicPlayer::music, (ma_uint64)seekQuery);
         else this->writeLine(U"[log.error] Seek query out of duration of media!\n");
     }
     else this->writeLine(U"[log.error] Not currently playing music! Use \"play\" and \"stop\" to change media.\n");
@@ -666,35 +487,20 @@ void TacradCLI::commandVolume(const std::vector<std::u32string>& cmd)
         wvStr.push_back(c);
     std::wistringstream ss(std::move(wvStr));
     float v; ss >> v;
-    ma_engine_set_volume(&engine, v);
+    ma_engine_set_volume(&MusicPlayer::engine, v);
 }
 void TacradCLI::commandStop(const std::vector<std::u32string>& cmd)
 {
-    if (playing)
-        stopMusic();
+    if (MusicPlayer::playing)
+        MusicPlayer::stopMusic();
     else this->writeLine(U"[log.error] Not currently playing music! Use \"play\" to start media.\n");
 }
 void TacradCLI::commandNext(const std::vector<std::u32string>& cmd)
 {
     if (cmd.size() > 2)
         this->writeLine(U"[log.error] Extra arguments given to \"playl\"!\n");
-    PlaylistNext:
-    bool wasPaused = paused;
-    if (playing)
-        stopMusic();
-    switch (type)
-    {
-    case PlaylistType::Sequential:
-        tryPlayNextAlphabetical(musicName, wasPaused);
-        break;
-    case PlaylistType::Shuffle:
-        tryPlayNextShuffle(wasPaused);
-        break;
-    case PlaylistType::Queued:
-        incrQueuePos();
-        tryPlayNextQueued(wasPaused);
-        break;
-    }
+    
+    MusicPlayer::next();
 }
 void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
 {
@@ -717,7 +523,7 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
             this->writeLine(U"[log.error] Extra arguments given to \"playl\"!\n");
             break;
         }
-        type = PlaylistType::Shuffle;
+        MusicPlayer::type = PlaylistType::Shuffle;
         break;
     case hashString(U"--Sequential"):
     case hashString(U"--seq"):
@@ -727,7 +533,7 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
             this->writeLine(U"[log.error] Extra arguments given to \"playl\"!\n");
             break;
         }
-        type = PlaylistType::Sequential;
+        MusicPlayer::type = PlaylistType::Sequential;
         break;
     case hashString(U"--queued"):
     case hashString(U"-q"):
@@ -736,7 +542,7 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
             this->writeLine(U"[log.error] Extra arguments given to \"playl\"!\n");
             break;
         }
-        type = PlaylistType::Queued;
+        MusicPlayer::type = PlaylistType::Queued;
         break;
     case hashString(U"--push"):
     case hashString(U"-p"):
@@ -753,8 +559,8 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
                 lookupName.append(word);
             }
             fs::path path;
-            std::u32string name = musicLookup(lookupName, path);
-            queue.push_back(std::make_pair(name, std::move(path)));
+            std::u32string name = MusicPlayer::musicLookup(lookupName, path);
+            MusicPlayer::queue.push_back(std::make_pair(name, std::move(path)));
             this->writeLine(std::u32string(U"[log.info] Adding \"").append(name).append(U"\" to playlist music queue.\n"));
         }
         break;
@@ -767,11 +573,11 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
                 break;
             }
 
-            if (!queue.empty())
+            if (!MusicPlayer::queue.empty())
             {
                 std::u32string playlist;
                 size_t i = 1;
-                for (auto it = queue.begin(); it != queue.end(); ++it)
+                for (auto it = MusicPlayer::queue.begin(); it != MusicPlayer::queue.end(); ++it)
                 {
                     std::wostringstream ss;
                     ss << i++;
@@ -780,7 +586,7 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
                     for (auto c : wiStr)
                         iStr.push_back(c);
                     playlist.append(iStr).append(U". ").append(it->first);
-                    if (it == queuePos)
+                    if (it == MusicPlayer::queuePos)
                         playlist.append(U" < You Are Here");
                     playlist.push_back(U'\n');
                 }
@@ -803,33 +609,74 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
                 break;
             }
 
-            std::wstring diffStr; diffStr.reserve(cmd[2].size());
-            for (auto c : cmd[2])
-                diffStr.push_back(c);
-            std::wstringstream ss(std::move(diffStr));
-            int diff; size_t pos; ss >> diff; pos = ss.tellg();
-            if (pos != cmd[2].size() || pos < 1)
+            std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> conv;
+            size_t readCount = 0;
+            int index = std::stoi(conv.to_bytes(cmd[2]), &readCount);
+            if (readCount != cmd[2].size())
             {
                 this->writeLine(U"[log.error] Invalid index argument given to \"playl --index\"!\n");
                 break;
             }
-            if (pos > queue.size())
+            if (index < 1 || index > MusicPlayer::queue.size())
             {
                 this->writeLine(U"[log.error] Index argument given to \"playl --index\" out of range!\n");
                 break;
             }
 
-            auto queryPos = queue.begin();
-            std::advance(queryPos, diff - 1);
+            auto queryPos = MusicPlayer::queue.begin();
+            std::advance(queryPos, index - 1);
 
-            if (queuePos != queryPos)
+            if (MusicPlayer::queuePos != queryPos)
             {
-                queuePos = queryPos;
-                bool wasPaused = paused;
-                if (playing)
-                    stopMusic();
-                tryPlayNextQueued(paused);
+                MusicPlayer::queuePos = queryPos;
+                bool wasPaused = MusicPlayer::paused;
+                if (MusicPlayer::playing)
+                    MusicPlayer::stopMusic();
+                MusicPlayer::tryPlayNextQueued(MusicPlayer::paused);
             }
+        }
+        break;
+    case hashString(U"--remove"):
+    case hashString(U"-r"):
+        {
+            if (cmd.size() < 3)
+            {
+                this->writeLine(U"[log.error] \"playl --remove\" requires an index argument!\n");
+                break;
+            }
+            if (MusicPlayer::queue.empty())
+            {
+                this->writeLine(U"[log.error] Playlist music queue is empty!\n");
+                break;
+            }
+
+            std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> conv;
+            size_t readCount = 0;
+            int index = std::stoi(conv.to_bytes(cmd[2]), &readCount);
+            if (readCount != cmd[2].size())
+            {
+                this->writeLine(U"[log.error] Invalid index argument given to \"playl --remove\"!\n");
+                break;
+            }
+            if (index < 1 || index > MusicPlayer::queue.size())
+            {
+                this->writeLine(U"[log.error] Index argument given to \"playl --index\" out of range!\n");
+                break;
+            }
+            
+            auto queryPos = MusicPlayer::queue.begin();
+            std::advance(queryPos, index - 1);
+
+            if (MusicPlayer::queuePos == queryPos)
+            {
+                MusicPlayer::queuePos = ++decltype(queryPos)(queryPos) != MusicPlayer::queue.end() ? queryPos : MusicPlayer::queue.begin();
+                bool wasPaused = MusicPlayer::paused;
+                if (MusicPlayer::playing)
+                    MusicPlayer::stopMusic();
+                MusicPlayer::tryPlayNextQueued(MusicPlayer::paused);
+            }
+
+            MusicPlayer::queue.erase(queryPos);
         }
         break;
     case hashString(U"--loop"):
@@ -837,7 +684,7 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
         switch (cmd.size())
         {
         case 2:
-            loop = !loop;
+            MusicPlayer::loop = !MusicPlayer::loop;
             goto LoopSet;
         case 3:
             switch (hashString(cmd[2]))
@@ -845,12 +692,12 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
             case hashString(U"true"):
             case hashString(U"t"):
             case hashString(U"1"):
-                loop = true;
+                MusicPlayer::loop = true;
                 goto LoopSet;
             case hashString(U"false"):
             case hashString(U"f"):
             case hashString(U"0"):
-                loop = false;
+                MusicPlayer::loop = false;
                 goto LoopSet;
             default:
                 this->writeLine(U"[log.error] Unknown boolean argument given to \"playl\"!\n");
@@ -859,7 +706,7 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
         LoopSet:
             {
                 std::wostringstream ss;
-                ss << L"[log.info] Playlist queue looping set to " << (loop ? L"true" : L"false") << L'!';
+                ss << L"[log.info] Playlist queue looping set to " << (MusicPlayer::loop ? L"true" : L"false") << L'!';
                 std::wstring outStr = ss.str();
                 std::u32string out; out.reserve(outStr.size());
                 for (auto c : outStr)
@@ -878,8 +725,8 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
             this->writeLine(U"[log.error] Extra arguments given to \"playl\"!\n");
             break;
         }
-        queue.clear();
-        queuePos = queue.end();
+        MusicPlayer::queue.clear();
+        MusicPlayer::queuePos = MusicPlayer::queue.end();
         this->writeLine(U"[log.info] Clearing playlist queue.\n");
         break;
     default:
@@ -888,8 +735,8 @@ void TacradCLI::commandPlaylist(const std::vector<std::u32string>& cmd)
 }
 void TacradCLI::commandExit(const std::vector<std::u32string>& cmd)
 {
-    if (playing)
-        stopMusic();
+    if (MusicPlayer::playing)
+        MusicPlayer::stopMusic();
     Application::quit();
 }
 
@@ -938,21 +785,20 @@ void TacradCLI::onCommand(std::u32string_view command)
     }
 }
 
-
 static struct TacradCLISystem
 {
     inline TacradCLISystem()
     {
         EngineEvent::OnInitialize += []
         {
-            TacradCLI::font = file_cast<TrueTypeFontPackageFile>(PackageManager::lookupFileByPath(L"assets/Inconsolata/static/Inconsolata-Light.ttf"));
+            TacradCLI::font = file_cast<TrueTypeFontPackageFile>(PackageManager::lookupFileByPath(L"assets/Inconsolata/static/Inconsolata-Regular.ttf"));
             
-            if (ma_result code = ma_engine_init(nullptr, &TacradCLI::engine); code != MA_SUCCESS) [[unlikely]]
+            if (ma_result code = ma_engine_init(nullptr, &MusicPlayer::engine); code != MA_SUCCESS) [[unlikely]]
             {
                 Debug::logError("Audio engine failed to initialize with code ", code, ".\n");
                 Application::quit();
             }
-
+            
             Input::beginQueryTextInput();
         };
         EngineEvent::OnQuit += []
@@ -961,11 +807,11 @@ static struct TacradCLISystem
 
             EntityManager2D::foreachEntityWithAll<TacradCLI>([](Entity2D* entity, TacradCLI* cli)
             {
-                if (cli->playing)
-                    cli->stopMusic();
+                if (MusicPlayer::playing)
+                    MusicPlayer::stopMusic();
             });
                 
-            ma_engine_uninit(&TacradCLI::engine);
+            ma_engine_uninit(&MusicPlayer::engine);
         };
 
         auto onTextInput = [](Key key)
@@ -1067,112 +913,118 @@ static struct TacradCLISystem
         {
             EntityManager2D::foreachEntityWithAll<TacradCLI>([&](Entity2D* entity, TacradCLI* cli)
             {
-                ma_uint64 curFrame = ma_sound_get_time_in_pcm_frames(&cli->music);
-                if (cli->playing && curFrame != cli->prevFrame)
+                ma_uint64 curFrame = ma_sound_get_time_in_pcm_frames(&MusicPlayer::music);
+                if (MusicPlayer::playing && curFrame != MusicPlayer::prevFrame)
                 {
-                    if (curFrame >= cli->frameLen)
+                    if (curFrame >= MusicPlayer::frameLen)
                     {
                         if (fs::exists("music/"))
                         {
-                            switch (cli->type)
+                            switch (MusicPlayer::type)
                             {
-                            case TacradCLI::PlaylistType::Sequential:
+                            case PlaylistType::Sequential:
                                 goto TrackRestart;
-                            case TacradCLI::PlaylistType::Shuffle:
-                                cli->stopMusic();
-                                cli->tryPlayNextShuffle();
+                            case PlaylistType::Shuffle:
+                                MusicPlayer::stopMusic();
+                                MusicPlayer::tryPlayNextShuffle();
                                 break;
-                            case TacradCLI::PlaylistType::Queued:
-                                cli->stopMusic();
-                                cli->incrQueuePos();
-                                cli->tryPlayNextQueued();
+                            case PlaylistType::Queued:
+                                {
+                                    MusicPlayer::stopMusic();
+
+                                    auto prev = MusicPlayer::queuePos;
+                                    MusicPlayer::incrQueuePos();
+                                    if (MusicPlayer::queuePos != prev)
+                                        MusicPlayer::tryPlayNextQueued();
+                                    else cli->pushLine();
+                                }
                                 break;
                             }
                         }
                         else
                         {
                             TrackRestart:
-                            cli->paused = true;
-                            ma_sound_seek_to_pcm_frame(&cli->music, 0);
+                            MusicPlayer::paused = true;
+                            ma_sound_seek_to_pcm_frame(&MusicPlayer::music, 0);
                         }
                     }
-                    cli->prevFrame = curFrame;
+                    MusicPlayer::prevFrame = curFrame;
                 }
 
                 std::u32string displayStr = cli->str;
-                if (cli->playing)
-                {
-                    constexpr auto sdFloat = [](float val, std::streamsize prec = 1) -> std::u32string
-                    {
-                        std::wostringstream ss;
-                        ss << std::fixed << std::setprecision(prec) << val;
-                        std::wstring wret = std::move(ss).str();
-                        std::u32string ret; ret.reserve(wret.size());
-                        for (auto c : wret)
-                            ret.push_back((char32_t)c);
-                        return ret;
-                    };
-
-                    std::u32string playBarBeg = U"Now Playing: ";
-                    playBarBeg
-                    .append(cli->paused ? U"# " : U"> ")
-                    .append(cli->musicName)
-                    .append(U"  ")
-                    .append(sdFloat((float)ma_sound_get_time_in_pcm_frames(&cli->music) / (float)ma_engine_get_sample_rate(&TacradCLI::engine)))
-                    .append(U" / ")
-                    .append(sdFloat(cli->musicLen))
-                    .append(U" (");
-                    if (int32_t mins = (int32_t)cli->musicLen / 60; mins > 0)
-                    {
-                        std::wstring wminsStr = std::to_wstring(mins);
-                        std::u32string minsStr; minsStr.reserve(wminsStr.size());
-                        for (auto c : wminsStr)
-                            minsStr.push_back((char32_t)c);
-                        playBarBeg
-                        .append(minsStr)
-                        .append(U"min ");
-                    }
-                    std::wstring wsecsStr = std::to_wstring(int32_t(cli->musicLen + 0.5f) % 60);
-                    std::u32string secsStr; secsStr.reserve(wsecsStr.size());
-                    for (auto c : wsecsStr)
-                        secsStr.push_back((char32_t)c);
-                    playBarBeg
-                    .append(secsStr)
-                    .append(U"s)  ")
-                    .append(sdFloat(ma_engine_get_volume(&TacradCLI::engine), 2))
-                    .append(U"v |");
-                    std::u32string playBarEnd = U"|";
-
-                    ma_uint64 curFrame = ma_sound_get_time_in_pcm_frames(&cli->music);
-
-                    int64_t barLen = (int64_t)(cli->width()) - (int64_t)playBarBeg.size() - (int64_t)playBarEnd.size();
-                    int64_t played = barLen * (int64_t)curFrame / (int64_t)cli->frameLen;
-                    std::u32string out;
-                    out
-                    .append(playBarBeg)
-                    .append(std::u32string(std::max((int64_t)0, played), '='))
-                    .append(U"+")
-                    .append(std::u32string(std::max((int64_t)1, barLen - played - 1), '-'))
-                    .append(playBarEnd);
-
-                    if (out.size() > std::max(cli->width(), uint32_t(1)) && cli->width() > 3)
-                    {
-                        for (size_t i = out.size() - 1; i >= cli->width() - 3; i--)
-                            out.pop_back();
-                        out.append(U"...");
-                    }
-
-                    size_t workingLineStart = displayStr.find_last_of(U'\n');
-                    std::u32string workingLine;
-                    if (workingLineStart != std::u32string::npos)
-                    {
-                        workingLine = displayStr.substr(workingLineStart + 1);
-                        displayStr.erase(workingLineStart + 1);
-                        displayStr.append(out);
-                        displayStr.push_back(U'\n');
-                        displayStr.append(workingLine);
-                    }
-                }
+                // if (MusicPlayer::playing)
+                // {
+                //     constexpr auto sdFloat = [](float val, std::streamsize prec = 1) -> std::u32string
+                //     {
+                //         std::wostringstream ss;
+                //         ss << std::fixed << std::setprecision(prec) << val;
+                //         std::wstring wret = std::move(ss).str();
+                //         std::u32string ret; ret.reserve(wret.size());
+                //         for (auto c : wret)
+                //             ret.push_back((char32_t)c);
+                //         return ret;
+                //     };
+// 
+                //     std::u32string playBarBeg = U"Now Playing: ";
+                //     playBarBeg
+                //     .append(MusicPlayer::paused ? U"# " : U"> ")
+                //     .append(MusicPlayer::musicName)
+                //     .append(U"  ")
+                //     .append(sdFloat((float)ma_sound_get_time_in_pcm_frames(&MusicPlayer::music) / (float)ma_engine_get_sample_rate(&MusicPlayer::engine)))
+                //     .append(U" / ")
+                //     .append(sdFloat(MusicPlayer::musicLen))
+                //     .append(U" (");
+                //     if (int32_t mins = (int32_t)MusicPlayer::musicLen / 60; mins > 0)
+                //     {
+                //         std::wstring wminsStr = std::to_wstring(mins);
+                //         std::u32string minsStr; minsStr.reserve(wminsStr.size());
+                //         for (auto c : wminsStr)
+                //             minsStr.push_back((char32_t)c);
+                //         playBarBeg
+                //         .append(minsStr)
+                //         .append(U"min ");
+                //     }
+                //     std::wstring wsecsStr = std::to_wstring(int32_t(MusicPlayer::musicLen + 0.5f) % 60);
+                //     std::u32string secsStr; secsStr.reserve(wsecsStr.size());
+                //     for (auto c : wsecsStr)
+                //         secsStr.push_back((char32_t)c);
+                //     playBarBeg
+                //     .append(secsStr)
+                //     .append(U"s)  ")
+                //     .append(sdFloat(ma_engine_get_volume(&MusicPlayer::engine), 2))
+                //     .append(U"v |");
+                //     std::u32string playBarEnd = U"|";
+// 
+                //     ma_uint64 curFrame = ma_sound_get_time_in_pcm_frames(&MusicPlayer::music);
+// 
+                //     int64_t barLen = (int64_t)(cli->width()) - (int64_t)playBarBeg.size() - (int64_t)playBarEnd.size();
+                //     int64_t played = barLen * (int64_t)curFrame / (int64_t)MusicPlayer::frameLen;
+                //     std::u32string out;
+                //     out
+                //     .append(playBarBeg)
+                //     .append(std::u32string(std::max((int64_t)0, played), '='))
+                //     .append(U"+")
+                //     .append(std::u32string(std::max((int64_t)0, barLen - played - 1), '-'))
+                //     .append(playBarEnd);
+// 
+                //     if (out.size() > std::max(cli->width(), uint32_t(1)) && cli->width() > 3)
+                //     {
+                //         for (size_t i = out.size() - 1; i >= cli->width() - 3; i--)
+                //             out.pop_back();
+                //         out.append(U"...");
+                //     }
+// 
+                //     size_t workingLineStart = displayStr.find_last_of(U'\n');
+                //     std::u32string workingLine;
+                //     if (workingLineStart != std::u32string::npos)
+                //     {
+                //         workingLine = displayStr.substr(workingLineStart + 1);
+                //         displayStr.erase(workingLineStart + 1);
+                //         displayStr.append(out);
+                //         displayStr.push_back(U'\n');
+                //         displayStr.append(workingLine);
+                //     }
+                // }
                 if (cli->showCursorThisFrame)
                     displayStr.push_back(cursorCharacter);
                 if (cli->nextTimePoint > 0.64f)
@@ -1181,29 +1033,19 @@ static struct TacradCLISystem
                     cli->showCursorThisFrame = !cli->showCursorThisFrame;
                 }
                 cli->_text->text = std::move(displayStr);
+
+                cli->_text->rectTransform()->rect = RectFloat
+                (
+                    0, cli->rectTransform()->rect().right - CONSOLE_PADDING_SIDE,
+                    -cli->_text->calculateBestFitHeight(), cli->rectTransform()->rect().left + CONSOLE_PADDING_SIDE
+                );
                 
                 if (cli->seekIfOutOfFrame)
                 {
-                    if (cli->_text->rectTransform()->position().y + cli->_text->rectTransform()->rect().bottom > (float)Window::pixelHeight() / 2.0f - 16.0f)
+                    if (cli->_text->rectTransform()->localPosition().y + cli->_text->rectTransform()->rect().bottom < -cli->rectTransform()->rect().height())
                     {
-                        cli->scrollTop = -(cli->_text->rectTransform()->rect().top - cli->_text->rectTransform()->rect().bottom - 16.0f) / 16.0f / 3.0f;
-                        cli->_text->rectTransform()->rect = RectFloat
-                        (
-                            0, cli->rectTransform()->rect().right,
-                            -cli->_text->calculateBestFitHeight(), cli->rectTransform()->rect().left
-                        );
+                        cli->_text->rectTransform()->localPosition = sysm::vector2(0.0f, -cli->rectTransform()->rect().height() - cli->_text->rectTransform()->rect().bottom);
                     }
-                    else
-                    {
-                        cli->_text->rectTransform()->rect = RectFloat
-                        (
-                            0, cli->rectTransform()->rect().right,
-                            -cli->_text->calculateBestFitHeight(), cli->rectTransform()->rect().left
-                        );
-                        if (cli->_text->rectTransform()->position().y + cli->_text->rectTransform()->rect().bottom < -Window::pixelHeight() / 2)
-                            cli->scrollTop = (Window::pixelHeight() - (cli->_text->rectTransform()->rect().top - cli->_text->rectTransform()->rect().bottom)) / 16.0f / 3.0f;
-                    }
-                    cli->rectTransform()->position = Vector2(0.0f, Window::pixelHeight() / 2 - cli->scrollTop * 16.0f * 3.0f);
 
                     cli->seekIfOutOfFrame = false;
                 }
@@ -1211,55 +1053,15 @@ static struct TacradCLISystem
                 cli->nextTimePoint += Time::deltaTime();
             });
         };
-        EngineEvent::OnWindowResize += [](Vector2Int prev)
+        EngineEvent::OnMouseScroll += [](sysm::vector2 scroll)
         {
             EntityManager2D::foreachEntityWithAll<TacradCLI>([&](Entity2D* entity, TacradCLI* cli)
             {
-                cli->rectTransform()->position = Vector2(0.0f, Window::pixelHeight() / 2 - cli->scrollTop * 16.0f * 3.0f);
-                cli->rectTransform()->rect = RectFloat
-                (
-                    0, Window::pixelWidth() / 2,
-                    -Window::pixelHeight(), -Window::pixelWidth() / 2
-                );
-                cli->_text->rectTransform()->rect = RectFloat
-                (
-                    0, cli->rectTransform()->rect().right,
-                    -cli->_text->calculateBestFitHeight(), cli->rectTransform()->rect().left
-                );
-
-                cli->updateRect = RectFloat(Window::pixelHeight() / 2, Window::pixelWidth() / 2, -Window::pixelHeight(), -Window::pixelWidth() / 2);
-            });
-        };
-        EngineEvent::OnMouseScroll += [](Vector2 scroll)
-        {
-            EntityManager2D::foreachEntityWithAll<TacradCLI>([&](Entity2D* entity, TacradCLI* cli)
-            {
-                cli->updateRect.top = Math::clamp<float>(cli->_text->rectTransform()->position().y + cli->_text->rectTransform()->rect().top, cli->updateRect.top, Window::pixelHeight() / 2);
-                cli->updateRect.bottom = Math::clamp<float>(cli->_text->rectTransform()->position().y + cli->_text->rectTransform()->rect().bottom, cli->updateRect.bottom, -Window::pixelHeight() / 2);
-
-                cli->scrollTop = std::min(0.0f, cli->scrollTop + scroll.y);
-                cli->rectTransform()->position = Vector2(0.0f, Window::pixelHeight() / 2 - cli->scrollTop * 16.0f * 3.0f);
-                cli->_text->rectTransform()->position = Vector2(0.0f, Window::pixelHeight() / 2 - cli->scrollTop * 16.0f * 3.0f);
-
-                cli->updateRect.top = Math::clamp<float>(cli->_text->rectTransform()->position().y + cli->_text->rectTransform()->rect().top, cli->updateRect.top, Window::pixelHeight() / 2);
-                cli->updateRect.bottom = Math::clamp<float>(cli->_text->rectTransform()->position().y + cli->_text->rectTransform()->rect().bottom, cli->updateRect.bottom, -Window::pixelHeight() / 2);
+                cli->_text->rectTransform()->localPosition = sysm::vector2(0.0f, std::max(-CONSOLE_PADDING_TOP, cli->_text->rectTransform()->localPosition().y - scroll.y * cli->_text->fontSize() * 3.0f));
 
                 cli->nextTimePoint = 0.0f;
                 cli->showCursorThisFrame = true;
             });
-        };
-        InternalEngineEvent::OnRenderOffloadForComponent2D += [](Component2D* component)
-        {
-            switch (component->typeIndex())
-            {
-            case __typeid(TacradCLI).qualifiedNameHash():
-                TacradCLI* cli = static_cast<TacradCLI*>(component);
-                if (cli->updateRect.top > cli->updateRect.bottom)
-                {
-                    cli->updateRect = RectFloat(-Window::pixelHeight() / 2, Window::pixelWidth() / 2, Window::pixelHeight(), -Window::pixelWidth() / 2);
-                }
-                break;
-            }
         };
     }
 } init;

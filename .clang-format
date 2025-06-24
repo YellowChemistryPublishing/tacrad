@@ -1,0 +1,73 @@
+BasedOnStyle: Microsoft
+
+# Braces
+BreakBeforeBraces: Custom
+BraceWrapping:
+    AfterCaseLabel: true
+    AfterClass: true
+    AfterControlStatement: Always
+    AfterEnum: true
+    AfterExternBlock: true
+    AfterFunction: true
+    AfterNamespace: true
+    AfterObjCDeclaration: true
+    AfterStruct: true
+    AfterUnion: true
+    BeforeCatch: true
+    BeforeElse: true
+    BeforeLambdaBody: true
+    BeforeWhile: true
+    IndentBraces: false
+    SplitEmptyFunction: false
+    SplitEmptyRecord: false
+
+# Space Insertion
+SpaceBeforeParens: Custom
+SpaceBeforeParensOptions:
+    AfterControlStatements: true
+    AfterForeachMacros: true
+    AfterFunctionDeclarationName: false
+    AfterFunctionDefinitionName: false
+    AfterIfMacros: true
+    AfterOverloadedOperator: false
+    AfterPlacementOperator: false
+    AfterRequiresInClause: true
+    AfterRequiresInExpression: false
+    BeforeNonEmptyParentheses: false
+
+# Spacing
+ColumnLimit: 180
+IndentWidth: 4
+SpaceInEmptyBlock: true # Won't work for initializer lists, implement when feature is available.
+PointerAlignment: Left
+LambdaBodyIndentation: OuterScope
+IndentPPDirectives: None
+NamespaceIndentation: All
+ContinuationIndentWidth: 4
+AlignEscapedNewlines: LeftWithLastLine
+AlignAfterOpenBracket: Align
+AlignOperands: DontAlign
+IndentAccessModifiers: false
+AccessModifierOffset: -4
+BreakBeforeConceptDeclarations: Always
+BreakTemplateDeclarations: Yes
+BreakConstructorInitializers: AfterColon
+PackConstructorInitializers: BinPack
+BinPackArguments: true
+IndentCaseLabels: false
+IndentCaseBlocks: true
+SpaceBeforeCpp11BracedList: true
+Cpp11BracedListStyle: false
+
+# Control Flow
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: true
+AllowShortBlocksOnASingleLine: false
+AllowShortLambdasOnASingleLine: Inline
+AllowShortFunctionsOnASingleLine: None
+
+# Types
+IndentRequiresClause: false
+EmptyLineBeforeAccessModifier: Never
+EmptyLineAfterAccessModifier: Never
